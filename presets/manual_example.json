@@ -1,0 +1,35 @@
+{
+    "_comment": "AI Video Generator 1.0 — MANUAL MODE Preset Template",
+    "_instructions": [
+        "This preset uses 'manual' mode: YOU write the scene concepts",
+        "and GLM-4.7 enhances them into production-ready video prompts.",
+        "",
+        "HOW TO USE:",
+        "  1. Copy this file:  copy manual_example.json my_scenes.json",
+        "  2. Replace 'user_prompts' with your own scene descriptions",
+        "  3. Run:  python utils/video_gen.py --preset presets/my_scenes.json",
+        "",
+        "WHAT TO CHANGE:",
+        "  • user_prompts — list of scene descriptions (one per video)",
+        "    Write a short description of what you want to see.",
+        "    GLM will enhance each into a detailed, cinematic prompt.",
+        "    Number of videos = number of prompts (1:1 mapping).",
+        "",
+        "  • style / mood / aspect / duration / mode / sound / image_url",
+        "    Same as auto mode — see sample_tech_news.json for details.",
+        "",
+        "TIP: For image-to-video, set image_url to a URL or local path.",
+        "     The image becomes the first frame and the AI animates it."
+    ],
+    "pipeline": "manual",
+    "user_prompts": [
+        "A massive solar farm stretching across a desert, panels gleaming under golden hour light, with a slow drone flyover revealing the scale"
+    ],
+    "style": "cinematic",
+    "mood": "dynamic",
+    "aspect": "16:9",
+    "duration": 5,
+    "mode": "std",
+    "sound": true,
+    "image_url": null
+}

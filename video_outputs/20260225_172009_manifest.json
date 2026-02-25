@@ -1,0 +1,43 @@
+{
+  "run_timestamp": "20260225_172009",
+  "settings": {
+    "pipeline": "auto",
+    "style": "cinematic",
+    "mood": "dynamic",
+    "videos": 3,
+    "aspect": "16:9",
+    "duration": 5,
+    "mode": "std",
+    "sound": true,
+    "region": "US",
+    "language": "en",
+    "topic": "AI model, robotics",
+    "trends_count": 5
+  },
+  "videos": [
+    {
+      "index": 1,
+      "filename": "20260225_172009_ai-model-robotics_cinematic_dynamic_001.mp4",
+      "task_id": "3ec46376a494e357a50a917e5b0a1987",
+      "url": "https://tempfile.aiquickdraw.com/h/3ec46376a494e357a50a917e5b0a1987_1772000695.mp4",
+      "prompt": "Extreme macro close-up on a 100mm macro lens with rack focus, watching jagged mRNA strands weave themselves into a perfect sphere within a viscous dark suspension. The scene depicts rapid biological synthesis inside a glass vial, capturing microscopic fluid turbulence and lipid membrane formation. Lighting consists of internal bio-luminescence casting a soft cyan glow against deep black voids, with sharp specular highlights on the wet organic surfaces. Color palette features electric cyan and magenta contrast against obsidian, mimicking high-tech scientific visualization renderings.",
+      "error": null
+    },
+    {
+      "index": 2,
+      "filename": "20260225_172009_ai-model-robotics_cinematic_dynamic_002.mp4",
+      "task_id": "402a5608337ea47bebe558a3942531e9",
+      "url": "https://tempfile.aiquickdraw.com/h/402a5608337ea47bebe558a3942531e9_1772000683.mp4",
+      "prompt": "Low-angle static shot on a 35mm lens, focus pulling from the background to a robotic hand turning a translucent glass cube with inhuman fluidity. The environment is a pristine industrial laboratory featuring polished brushed-aluminum workbenches and matte white composite walls. Lighting is a diffused overhead skylight simulation creating soft, wraparound radiance without harsh shadows. Color palette utilizes sterile titanium white and cool slate grey, evoking a sleek, futuristic product launch aesthetic.",
+      "error": null
+    },
+    {
+      "index": 3,
+      "filename": "20260225_172009_ai-model-robotics_cinematic_dynamic_003.mp4",
+      "task_id": "d776dbfa730b209a0f9ce47044c457d3",
+      "url": "https://tempfile.aiquickdraw.com/h/d776dbfa730b209a0f9ce47044c457d3_1772000695.mp4",
+      "prompt": "180-degree orbiting dolly shot on a 24mm wide lens, capturing a humanoid torso materializing from a low-poly wireframe mesh into solid carbon fiber matter. The subject stands in a server farm aisle, rows of blinking black server racks blurring into streaks of motion on the periphery. Lighting transitions from the cold green glow of simulated data streams to the warm orange hum of active electronics. Color palette shifts from digital chartreuse to realistic anthracite and brushed steel, mirroring the bridge between software simulation and physical reality.",
+      "error": null
+    }
+  ]
+}

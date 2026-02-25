@@ -1,0 +1,28 @@
+{
+  "run_timestamp": "20260225_182757",
+  "settings": {
+    "pipeline": "manual",
+    "user_prompts": [
+      "A massive solar farm stretching across a desert, panels gleaming under golden hour light, with a slow drone flyover revealing the scale"
+    ],
+    "style": "cinematic",
+    "mood": "dynamic",
+    "aspect": "16:9",
+    "duration": 5,
+    "mode": "std",
+    "sound": true,
+    "image_url": null,
+    "topic": "custom",
+    "videos": 1
+  },
+  "videos": [
+    {
+      "index": 1,
+      "filename": "20260225_182757_custom_cinematic_dynamic_001.mp4",
+      "task_id": "fa4dd36ffe760b939904df15ff0ed572",
+      "url": "https://tempfile.aiquickdraw.com/h/fa4dd36ffe760b939904df15ff0ed572_1772004624.mp4",
+      "prompt": "Low-angle cinematic drone push-in on a 24mm wide-angle lens, gliding forward across an arid desert floor covered in cracked clay soil and endless rows of brushed aluminum solar panels catching specular highlights from the setting sun. The camera descends slightly over 5 seconds to reveal the vast scale of the farm as light ripples across the tempered glass surfaces, transitioning through warm ochre and burnt orange hues contrasted with electric blue reflections, styled with the high dynamic range of Roger Deakins. The soundscape features low-frequency wind rushing over the metal structures mixed with the rhythmic, soft thrumming of the drone motor and a faint, swelling ambient electronic drone.",
+      "error": null
+    }
+  ]
+}
