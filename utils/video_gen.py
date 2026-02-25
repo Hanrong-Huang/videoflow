@@ -1028,17 +1028,36 @@ def _audio_element(sound: bool) -> str:
     """
     Return the AUDIO & SOUND DESIGN element block for the system prompt.
     Only included when sound generation is enabled.
+
+    When sound is on, GLM is instructed to decide per-prompt whether the
+    scene calls for spoken dialogue (e.g. speeches, press conferences,
+    interviews) or pure ambient/music sound design (e.g. disasters, markets,
+    landscapes).  The decision is embedded inline in the prompt string so
+    Kling 3.0's native audio engine can generate the appropriate output.
     """
     if not sound:
         return ""
     return """
 
-6. AUDIO & SOUND DESIGN
-   Describe the soundscape: ambient environment sounds, music/BGM style
-   and tempo, and any human or animal voices.
-   e.g. "Low mechanical hum of server fans building in pitch, a single
-         metallic click as the chip locks into place. No music — pure
-         diegetic industrial ambience with subtle reverb."""
+6. AUDIO & SOUND DESIGN (with optional DIALOGUE)
+   First decide: does this story naturally involve people speaking on screen?
+
+   DIALOGUE stories — press conferences, speeches, interviews, courtroom
+   hearings, product launches, debates, announcements, negotiations:
+     Describe who is speaking and write their words in quotes, then add
+     the soundscape around them.
+     Format: [Role] says: "[line]". Then describe ambient audio.
+     e.g. "A CEO at a podium leans into the microphone: 'We are doubling
+           our investment in clean energy this year.' Sparse applause
+           ripples through the hall; low HVAC hum underneath."
+
+   AMBIENT stories — natural disasters, space events, markets, landscapes,
+   abstract data, technology processes, wildlife, architecture:
+     Describe only the soundscape: ambient sounds, music/BGM style,
+     mechanical or environmental effects. No spoken words.
+     e.g. "Deep subsonic rumble building to a sharp crack as the ice shelf
+           calves; no music — raw diegetic environmental audio with
+           heavy low-frequency reverb." """
 
 
 def _build_system_prompt(count: int, style: str, mood: str,
@@ -1097,7 +1116,10 @@ QUALITY RULES
 - Motion is mandatory: camera OR subject must move visibly within {duration} seconds.
 - Hyper-specific language only. No "beautiful", "stunning", "amazing", "dramatic".
 - No text, logos, watermarks, UI elements, or subtitles in the scene.
-- Do NOT quote the headline text — translate the theme into a pure visual metaphor.
+- Visuals must be metaphorical — do NOT reproduce the headline text as on-screen text.
+- Dialogue (when used) must feel cinematic and natural, NOT like a news anchor reading a headline.
+- Dialogue length should scale to the clip duration — longer clips can support more exchanges.
+- If sound is disabled, do NOT include any spoken words or dialogue in the prompt.
 - Return ONLY a raw JSON array of {count} strings. No markdown, no explanation."""
 
 
@@ -1240,6 +1262,8 @@ QUALITY RULES
 - Motion is mandatory: camera OR subject must move visibly within {duration} seconds.
 - Hyper-specific language only. No "beautiful", "stunning", "amazing", "dramatic".
 - No text, logos, watermarks, UI elements, or subtitles in the scene.
+- Dialogue (when used) must feel cinematic and natural; scale the length to the clip duration.
+- If sound is disabled, do NOT include any spoken words or dialogue in the prompt.
 - Return ONLY a raw JSON array of {count} strings. No markdown, no explanation."""
 
 
