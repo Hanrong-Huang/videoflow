@@ -1,5 +1,5 @@
 {
-    "_comment": "AI Video Generator 1.0 — MANUAL MODE Preset Template",
+    "_comment": "AI Video Generator 1.1 — MANUAL MODE Preset Template",
     "_instructions": [
         "This preset uses 'manual' mode: YOU write the scene concepts",
         "and GLM-4.7 enhances them into production-ready video prompts.",
@@ -15,13 +15,19 @@
         "    GLM will enhance each into a detailed, cinematic prompt.",
         "    Number of videos = number of prompts (1:1 mapping).",
         "",
+        "  • model — video backend: kling, veo3, sora-kie, sora, or sora-pro",
         "  • style / mood / aspect / duration / mode / sound / image_url",
-        "    Same as auto mode — see sample_tech_news.json for details.",
+        "    Same as auto mode — see auto_example.json for details.",
         "",
         "TIP: For image-to-video, set image_url to a URL or local path.",
-        "     The image becomes the first frame and the AI animates it."
+        "     The image becomes the first frame and the AI animates it.",
+        "",
+        "TIP: Set 'research' to search the web for background info.",
+        "     e.g. 'solar farm technology photovoltaic efficiency'",
+        "     GLM will use the facts to make prompts more accurate."
     ],
     "pipeline": "manual",
+    "model": "kling",
     "user_prompts": [
         "A massive solar farm stretching across a desert, panels gleaming under golden hour light, with a slow drone flyover revealing the scale"
     ],
@@ -31,5 +37,6 @@
     "duration": 5,
     "mode": "std",
     "sound": true,
-    "image_url": null
+    "image_url": null,
+    "research": null
 }

@@ -1,5 +1,9 @@
 {
   "run_timestamp": "20260225_172009",
+  "estimated_cost": {
+    "credits": 450,
+    "usd": 2.25
+  },
   "settings": {
     "pipeline": "auto",
     "style": "cinematic",

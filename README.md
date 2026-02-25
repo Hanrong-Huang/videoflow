@@ -1,18 +1,24 @@
-# AI Video Generator 1.0
+# AI Video Generator 1.1
 
 Automate the process of turning trending news headlines or personal scene concepts into professional AI-generated videos.
+
+Supports multiple video backends: **Kling 3.0**, **Veo 3.1**, **Sora 2 Pro** (via kie.ai) and **OpenAI Sora 2 / Sora 2 Pro** (direct).
 
 ---
 
 ## Project Structure
 
 ```
-workflow/
+videoflow/
 ├── README.md                   
 ├── utils/
-│   └── video_gen.py            (Main script)
+│   ├── video_gen.py            (Main orchestrator — run this)
+│   ├── models.py               (Video model registry)
+│   ├── cli.py                  (Interactive wizard & UI helpers)
+│   ├── prompts.py              (GLM-4.7 prompt generation & news)
+│   └── backends.py             (Video API backends — create/poll/download)
 ├── presets/
-│   ├── sample_tech_news.json   (Auto-mode template)
+│   ├── auto_example.json       (Auto-mode template)
 │   └── manual_example.json     (Manual-mode template)
 ├── images/
 │   └── README.md               (Reference images directory)
@@ -32,14 +38,17 @@ pip install requests openai colorama
 # Interactive wizard (step-by-step mode)
 python utils/video_gen.py
 
-# Full CLI mode (no interaction needed)
+# Full CLI mode — Kling (default)
 python utils/video_gen.py --pipeline auto --topic technology --style cinematic --videos 3
 
-# Load a preset (auto mode)
-python utils/video_gen.py --preset presets/auto_example.json
+# Full CLI mode — OpenAI Sora 2
+python utils/video_gen.py --pipeline auto --model sora --topic technology --videos 3
 
-# Load a preset (manual mode)
-python utils/video_gen.py --preset presets/manual_example.json
+# Full CLI mode — Veo 3.1 via kie.ai
+python utils/video_gen.py --pipeline auto --model veo3 --topic technology --videos 3
+
+# Load a preset
+python utils/video_gen.py --preset presets/auto_example.json
 ```
 
 ---
@@ -56,8 +65,8 @@ The script operates in two primary modes:
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  ┌───────────────┐    ┌──────────────────┐    ┌─────────────────┐   │
-│  │ Google News   │    │   Z.AI GLM-4.7   │    │  AI Video API   │   │
-│  │ RSS Feed      │───▶│   Prompt Engine  │───▶│  Generation    │   │
+│  │ Google News   │    │   Z.AI GLM-4.7   │    │  Video Backend  │   │
+│  │ RSS Feed      │───▶│   Prompt Engine  │───▶│  (Kling / Sora) │   │
 │  │               │    │                  │    │                 │   │
 │  │ • Region      │    │ • Selects best   │    │ • Renders .mp4  │   │
 │  │ • Language    │    │   headlines      │    │ • Adds audio    │   │
@@ -75,7 +84,7 @@ The script operates in two primary modes:
 **Workflow:**
 1. Fetches trending headlines from Google News RSS based on region and topic.
 2. GLM-4.7 analyzes the headlines, selects the most visually compelling ones, and writes detailed video prompts.
-3. Each prompt is submitted to the AI video API, polled in parallel, and downloaded.
+3. Each prompt is submitted to the chosen video backend (Kling or Sora), polled in parallel, and downloaded.
 
 ### Manual Mode (Your Ideas to Video)
 
@@ -85,8 +94,8 @@ The script operates in two primary modes:
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  ┌───────────────┐    ┌──────────────────┐    ┌─────────────────┐   │
-│  │ Your Scene    │    │   Z.AI GLM-4.7   │    │  AI Video API   │   │
-│  │ Concepts      │───▶│   Enhancement    │───▶│  Generation    │   │
+│  │ Your Scene    │    │   Z.AI GLM-4.7   │    │  Video Backend  │   │
+│  │ Concepts      │───▶│   Enhancement    │───▶│  (Kling / Sora) │   │
 │  │               │    │                  │    │                 │   │
 │  │ Short text    │    │ • Keeps your     │    │ • Renders .mp4  │   │
 │  │ descriptions  │    │   original idea  │    │ • Adds audio    │   │
@@ -108,6 +117,22 @@ The script operates in two primary modes:
 
 ---
 
+## Video Models
+
+Models are defined in `utils/models.py`. Edit that file to add or remove models.
+
+| CLI Name    | Model                  | Backend       | Notes                                    |
+|-------------|------------------------|---------------|------------------------------------------|
+| `kling`     | Kling 3.0              | kie.ai        | Default. Multi-shot, native audio        |
+| `veo3`      | Google Veo 3.1 Fast    | kie.ai        | Cinematic, audio, 1080p                  |
+| `sora-kie`  | OpenAI Sora 2 Pro      | kie.ai        | Credit-based billing                     |
+| `sora`      | OpenAI Sora 2          | OpenAI direct | $0.10/sec                                |
+| `sora-pro`  | OpenAI Sora 2 Pro      | OpenAI direct | $0.30–0.50/sec                           |
+
+Select via `--model kling`, `--model veo3`, `--model sora-kie`, etc. Default is `kling`.
+
+---
+
 ## Usage Modes
 
 ### 1. Interactive Wizard
@@ -122,31 +147,36 @@ python utils/video_gen.py
 For automation or scripting. Any omitted argument falls back to its default.
 
 ```bash
+# Kling (default)
 python utils/video_gen.py --pipeline auto --topic technology --style cinematic --videos 3
+
+# Sora
+python utils/video_gen.py --pipeline auto --model sora --topic technology --videos 3
 ```
 
 **Available Arguments:**
 
 | Argument          | Default      | Description                                |
-|-------------------|-------------|--------------------------------------------|
-| `--pipeline`      | `auto`      | `auto` (news) or `manual` (custom scenes)  |
-| `--region`        | `US`        | 2-letter country code                      |
-| `--language`      | `en`        | 2-letter language code                     |
-| `--topic`         | `top`       | News category or search keyword            |
-| `--trends-count`  | `5`         | Number of headlines to fetch               |
-| `--style`         | `cinematic` | Visual rendering style                     |
-| `--mood`          | `dynamic`   | Tone and atmosphere                        |
-| `--videos`        | `3`         | Number of videos to generate               |
-| `--aspect`        | `16:9`      | Aspect ratio (`16:9`, `9:16`, `1:1`)       |
-| `--duration`      | `5`         | Clip length in seconds                     |
-| `--mode`          | `std`       | `std` (720p) or `pro` (1080p)              |
-| `--sound`         | on          | Use `--no-sound` to disable audio          |
-| `--image`         | none        | URL/local path for image-to-video          |
-| `--prompts`       | —           | Scene descriptions (required for manual)   |
+|-------------------|-------------|---------------------------------------------|
+| `--pipeline`      | `auto`      | `auto` (news) or `manual` (custom scenes)   |
+| `--model`         | `kling`     | `kling`, `veo3`, `sora-kie`, `sora`, `sora-pro`  |
+| `--region`        | `US`        | 2-letter country code                        |
+| `--language`      | `en`        | 2-letter language code                       |
+| `--topic`         | `top`       | News category or search keyword              |
+| `--trends-count`  | `5`         | Number of headlines to fetch                 |
+| `--style`         | `cinematic` | Visual rendering style                       |
+| `--mood`          | `dynamic`   | Tone and atmosphere                          |
+| `--videos`        | `3`         | Number of videos to generate                 |
+| `--aspect`        | `16:9`      | Aspect ratio (`16:9`, `9:16`, `1:1`)         |
+| `--duration`      | `5`         | Clip length in seconds                       |
+| `--mode`          | `std`       | `std` (720p) or `pro` (1080p)                |
+| `--sound`         | on          | Use `--no-sound` to disable audio            |
+| `--image`         | none        | URL/local path for image-to-video            |
+| `--prompts`       | —           | Scene descriptions (required for manual)     |
 
-**Example (Manual CLI):**
+**Example (Manual CLI with Sora):**
 ```bash
-python utils/video_gen.py --pipeline manual \
+python utils/video_gen.py --pipeline manual --model sora \
   --prompts "A drone over a solar farm" "Robot assembling a circuit board" \
   --style cinematic --mood epic --duration 10
 ```
@@ -207,23 +237,26 @@ Completed runs generate:
 
 ## Environment Variables
 
-| Variable        | Purpose                              |
-|----------------|--------------------------------------|
-| `VIDEO_API_KEY` | AI video generation API bearer token |
-| `ZAI_API_KEY`   | Z.AI (GLM-4.7) API key               |
+| Variable         | Required For                         | Purpose                              |
+|-----------------|--------------------------------------|--------------------------------------|
+| `ZAI_API_KEY`    | All models                           | Z.AI (GLM-4.7) API key              |
+| `VIDEO_API_KEY`  | kie.ai models (`kling`, `veo3`, `sora-kie`) | Kie.ai API bearer token       |
+| `OPENAI_API_KEY` | OpenAI models (`sora`, `sora-pro`)   | OpenAI API key                       |
 
-You **must** set these environment variables before running the script.
+Set the keys for the backend(s) you plan to use. Only the relevant keys are validated at runtime.
 
 **Mac/Linux:**
 ```bash
-export VIDEO_API_KEY="your_api_key_here"
 export ZAI_API_KEY="your_zai_key_here"
+export VIDEO_API_KEY="your_kie_api_key_here"      # for Kling
+export OPENAI_API_KEY="your_openai_key_here"      # for Sora
 ```
 
 **Windows (PowerShell):**
 ```powershell
-$env:VIDEO_API_KEY="your_api_key_here"
 $env:ZAI_API_KEY="your_zai_key_here"
+$env:VIDEO_API_KEY="your_kie_api_key_here"        # for Kling
+$env:OPENAI_API_KEY="your_openai_key_here"        # for Sora
 ```
 
 ---
