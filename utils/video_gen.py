@@ -18,6 +18,7 @@ Pipeline:
 """
 
 import os
+import re
 import sys
 import json
 import base64
@@ -43,7 +44,7 @@ from backends import (
     submit_task, poll_all, download_result,
     make_output_dir, make_video_filename, write_manifest,
     download_video, extract_video_url,
-    ensure_openai_client,
+    ensure_openai_client, upload_image_to_kie,
 )
 
 # Initialise colorama without intercepting stdout (which breaks questionary on Windows)
@@ -269,12 +270,20 @@ def resume_from_manifest(path: str) -> None:
 # Image URL resolution — local paths → base64
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _resolve_image_url(raw: str | None) -> str | None:
+def _resolve_image_url(raw: str | None, download_remote: bool = False) -> str | None:
     """
-    Resolve any image reference to a base64 data URI.
-    - data: URI   → returned as-is (already encoded)
-    - http/https  → downloaded and base64-encoded
-    - local path  → read from disk and base64-encoded
+    Resolve an image reference for submission to a video backend.
+
+    download_remote=False  (Kling, Veo — default):
+      - data: URI   → returned as-is
+      - http/https  → returned as-is (API fetches the URL directly)
+      - local path  → read from disk and base64-encoded as data URI
+
+    download_remote=True  (Sora — needs bytes for file upload):
+      - data: URI   → returned as-is
+      - http/https  → downloaded and base64-encoded as data URI
+      - local path  → read from disk and base64-encoded as data URI
+
     Returns None if raw is None/empty.
     """
     if not raw:
@@ -282,6 +291,10 @@ def _resolve_image_url(raw: str | None) -> str | None:
     if raw.startswith("data:"):
         return raw
     if raw.startswith(("http://", "https://")):
+        if not download_remote:
+            # Kling/Veo fetch the URL themselves — just pass it through
+            return raw
+        # Sora needs the image as bytes (file upload)
         success(f"Downloading image: {Fore.CYAN}{raw[:72]}{'…' if len(raw) > 72 else ''}{Style.RESET_ALL}")
         try:
             with urllib.request.urlopen(raw, timeout=60) as resp:
@@ -291,12 +304,11 @@ def _resolve_image_url(raw: str | None) -> str | None:
             error(f"Failed to download image: {exc}")
             sys.exit(1)
         if not content_type.startswith("image/"):
-            # Fall back to guessing from URL
             guessed, _ = mimetypes.guess_type(raw.split("?")[0])
             content_type = guessed or "image/jpeg"
         encoded = base64.b64encode(data).decode()
         return f"data:{content_type};base64,{encoded}"
-    # Treat as a local file path
+    # Local file path — encode as base64 for all backends
     path = pathlib.Path(raw)
     if not path.is_absolute():
         path = _PROJECT_DIR / path
@@ -350,11 +362,13 @@ def main() -> None:
     }
     
     # ── Resolve images ────────────────────────────────────────────────────────
-    # image_urls is already list[list[str]] (normalised by wizard/load_preset/
-    # build_cfg_from_args). Just resolve any local paths to base64.
+    # Sora needs images downloaded and base64-encoded (file upload via SDK).
+    # Kling/Veo fetch images themselves — pass http/https URLs as-is;
+    # local files are base64-encoded into data URIs for all backends.
     num_vids = cfg.get("videos", 1)
+    download_remote = is_openai(model)
     image_urls: list[list[str]] = [
-        [r for url in scene if (r := _resolve_image_url(url))]
+        [r for url in scene if (r := _resolve_image_url(url, download_remote=download_remote))]
         for scene in cfg.get("image_urls", [])
     ]
     # Pad or truncate to match video count
@@ -362,6 +376,30 @@ def main() -> None:
         image_urls += [[]] * (num_vids - len(image_urls))
     else:
         image_urls = image_urls[:num_vids]
+
+    # For kie.ai backends (Kling, Veo): API only accepts real HTTP URLs.
+    # Local images (resolved to base64 data URIs) must be uploaded to CDN first.
+    # Sora uses base64 data URIs via SDK file upload — no CDN step needed.
+    if is_kie(model):
+        uploaded: list[list[str]] = []
+        for scene in image_urls:
+            scene_urls: list[str] = []
+            for url in scene:
+                if url.startswith("data:"):
+                    m = re.match(r"data:([^;]+);base64,(.+)", url)
+                    if m:
+                        mime     = m.group(1)
+                        ext      = mime.split("/")[-1]
+                        filename = f"upload_{datetime.datetime.now().strftime('%H%M%S%f')}.{ext}"
+                        img_data = base64.b64decode(m.group(2))
+                        success(f"Uploading local image to kie.ai CDN: {Fore.CYAN}{filename}{Style.RESET_ALL}")
+                        hosted   = upload_image_to_kie(img_data, filename, mime)
+                        success(f"Hosted at → {Fore.CYAN}{hosted}{Style.RESET_ALL}")
+                        scene_urls.append(hosted)
+                else:
+                    scene_urls.append(url)
+            uploaded.append(scene_urls)
+        image_urls = uploaded
 
     # ── Optional: Web research ───────────────────────────────────────────────
     research_query = cfg.get("research")

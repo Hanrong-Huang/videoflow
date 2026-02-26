@@ -101,6 +101,33 @@ def _http_post(url: str, payload: dict, headers: dict,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# kie.ai file upload helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+KIE_UPLOAD_URL = "https://kieai.redpandaai.co/api/file-stream-upload"
+
+
+def upload_image_to_kie(data: bytes, filename: str,
+                        content_type: str = "image/jpeg") -> str:
+    """
+    Upload a local image to kie.ai CDN and return its hosted URL.
+    Files are automatically deleted after 3 days.
+    """
+    resp = requests.post(
+        KIE_UPLOAD_URL,
+        headers={"Authorization": f"Bearer {VIDEO_API_KEY}"},
+        files={"file": (filename, data, content_type)},
+        data={"uploadPath": "images", "fileName": filename},
+        timeout=60,
+    )
+    resp.raise_for_status()
+    result = resp.json()
+    if not result.get("success"):
+        raise RuntimeError(f"Image upload failed: {result}")
+    return result["data"]["fileUrl"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # kie.ai createTask backend (Kling 3.0, Sora 2 Pro via kie.ai)
 # ─────────────────────────────────────────────────────────────────────────────
 
