@@ -26,7 +26,7 @@ from cli import success, warn, error
 
 # ── Constants ────────────────────────────────────────────────────────────────
 POLL_INTERVAL_SEC = 15
-POLL_TIMEOUT_SEC  = 3600
+POLL_TIMEOUT_SEC  = 1800
 HTTP_TIMEOUT_SEC  = 15
 
 NEGATIVE_PROMPT = (
@@ -501,8 +501,7 @@ def poll_sora_task(video_id: str) -> dict:
                 msg  = getattr(err, "message", str(err))
                 if code == "moderation_blocked":
                     raise RuntimeError(
-                        f"Moderation blocked — Sora rejected the prompt. "
-                        f"Try using 'kling' which has less restrictive moderation."
+                        "Blocked by moderation. Try changing the prompt or use a different model (e.g. kling)."
                     )
                 raise RuntimeError(f"Sora error [{code}]: {msg}")
             raise RuntimeError(f"Sora task failed (no error detail returned)")
@@ -534,7 +533,13 @@ def poll_all_sora_tasks(video_ids: list[str]) -> dict[str, dict]:
                     results[vid] = {"id": vid, "status": state, "video": video}
                     pending.discard(vid)
                 elif state in ("failed", "error"):
-                    results[vid] = {"error": f"Sora task failed: {video}"}
+                    err  = getattr(video, "error", None)
+                    code = getattr(err, "code", "unknown") if err else "unknown"
+                    if code == "moderation_blocked":
+                        results[vid] = {"error": "Blocked by moderation. Try changing the prompt or use a different model (e.g. kling)."}
+                    else:
+                        msg = getattr(err, "message", str(err)) if err else "no detail"
+                        results[vid] = {"error": f"Sora error [{code}]: {msg}"}
                     pending.discard(vid)
             except Exception as exc:
                 results[vid] = {"error": str(exc)}
