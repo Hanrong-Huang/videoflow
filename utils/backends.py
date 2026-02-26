@@ -8,11 +8,13 @@ Handles all interaction with video generation APIs:
 Each backend provides: create_task, poll, download functions.
 """
 
+import io
 import os
 import re
 import sys
 import json
 import time
+import base64
 import pathlib
 
 import requests
@@ -104,7 +106,7 @@ def _http_post(url: str, payload: dict, headers: dict,
 
 def create_video_task(prompt: str, video_cfg: dict,
                       model: str = "kling",
-                      image_url: str | None = None) -> str:
+                      image_urls: list[str] | None = None) -> str:
     """
     Submit one video task to a kie.ai createTask-compatible model.
     Returns its taskId.
@@ -133,8 +135,8 @@ def create_video_task(prompt: str, video_cfg: dict,
             "mode":            video_cfg["mode"],
             "multi_shots":     video_cfg["multi_shots"],
         }
-        if image_url:
-            input_block["image_urls"] = [image_url]
+        if image_urls:
+            input_block["image_urls"] = image_urls
 
     payload = {"model": api_model, "input": input_block}
 
@@ -295,7 +297,7 @@ def extract_video_url(result: dict) -> str | None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def create_veo_task(prompt: str, video_cfg: dict,
-                    image_url: str | None = None) -> str:
+                    image_urls: list[str] | None = None) -> str:
     """Submit a video task to the kie.ai Veo 3.1 endpoint."""
     payload: dict = {
         "prompt":       prompt,
@@ -304,8 +306,8 @@ def create_veo_task(prompt: str, video_cfg: dict,
         "enableTranslation": True,
         "generationType":    "TEXT_2_VIDEO",
     }
-    if image_url:
-        payload["imageUrls"] = [image_url]
+    if image_urls:
+        payload["imageUrls"] = image_urls
         payload["generationType"] = "REFERENCE_2_VIDEO"
 
     resp = _http_post(
@@ -391,7 +393,7 @@ def poll_all_veo_tasks(task_ids: list[str]) -> dict[str, dict]:
 
 def create_sora_openai_task(prompt: str, video_cfg: dict,
                             model: str = "sora",
-                            image_url: str | None = None) -> str:
+                            image_urls: list[str] | None = None) -> str:
     """Submit a video generation job to OpenAI Sora 2."""
     if openai_client is None:
         raise RuntimeError("OPENAI_API_KEY is not set — cannot use Sora.")
@@ -416,8 +418,23 @@ def create_sora_openai_task(prompt: str, video_cfg: dict,
         "seconds": seconds,
         "size":    size,
     }
-    if image_url:
-        kwargs["input_reference"] = image_url
+    if image_urls:
+        # Sora requires the reference image to exactly match the video dimensions.
+        # Decode the data URI, resize with Pillow, re-encode as JPEG bytes.
+        from PIL import Image as _PilImage
+        w, h = (int(d) for d in size.split("x"))
+        raw = image_urls[0]
+        m = re.match(r"data:([^;]+);base64,(.+)", raw)
+        if not m:
+            raise ValueError(f"Unexpected image format for Sora: {raw[:40]}")
+        data = base64.b64decode(m.group(2))
+        img = _PilImage.open(io.BytesIO(data)).convert("RGB")
+        if img.size != (w, h):
+            img = img.resize((w, h), _PilImage.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=92)
+        buf.seek(0)
+        kwargs["input_reference"] = ("reference.jpg", buf, "image/jpeg")
 
     result = openai_client.videos.create(**kwargs)  # type: ignore[union-attr]
     return result.id
@@ -451,7 +468,17 @@ def poll_sora_task(video_id: str) -> dict:
             return {"id": video_id, "status": state, "video": video}
         if state in ("failed", "error"):
             print()
-            raise RuntimeError(f"Sora task {video_id} failed: {video}")
+            err = getattr(video, "error", None)
+            if err:
+                code = getattr(err, "code", "unknown")
+                msg  = getattr(err, "message", str(err))
+                if code == "moderation_blocked":
+                    raise RuntimeError(
+                        f"Moderation blocked — Sora rejected the prompt. "
+                        f"Try using 'kling' which has less restrictive moderation."
+                    )
+                raise RuntimeError(f"Sora error [{code}]: {msg}")
+            raise RuntimeError(f"Sora task failed (no error detail returned)")
 
         time.sleep(POLL_INTERVAL_SEC)
 
@@ -642,18 +669,18 @@ def write_manifest(out_dir: pathlib.Path, run_ts: str,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def submit_task(prompt: str, video_cfg: dict, model: str,
-                image_url: str | None = None) -> str:
+                image_urls: list[str] | None = None) -> str:
     """Route task creation to the correct backend based on model."""
     model_info = MODELS[model]
 
     if is_openai(model):
         return create_sora_openai_task(prompt, video_cfg, model=model,
-                                       image_url=image_url)
+                                       image_urls=image_urls)
     elif model_info.get("endpoint") == "veo":
-        return create_veo_task(prompt, video_cfg, image_url=image_url)
+        return create_veo_task(prompt, video_cfg, image_urls=image_urls)
     else:
         return create_video_task(prompt, video_cfg, model=model,
-                                 image_url=image_url)
+                                 image_urls=image_urls)
 
 
 def poll_all(task_ids: list[str], model: str) -> dict[str, dict]:

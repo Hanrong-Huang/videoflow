@@ -33,7 +33,7 @@ videoflow/
 
 ```bash
 # Install dependencies (one-time)
-pip install requests openai colorama
+pip install requests openai colorama questionary Pillow ddgs
 
 # Interactive wizard (step-by-step mode)
 python utils/video_gen.py
@@ -267,3 +267,6 @@ $env:OPENAI_API_KEY="your_openai_key_here"        # for Sora
 - `requests`
 - `openai`
 - `colorama`
+- `questionary` — interactive wizard menus
+- `Pillow` — image resizing for Sora image-to-video
+- `ddgs` — web search for background research (`pip install ddgs`)

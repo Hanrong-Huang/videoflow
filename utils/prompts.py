@@ -31,8 +31,8 @@ HEADLINES_POOL       = 15
 HTTP_TIMEOUT_SEC     = 15
 MAX_JSON_RETRIES     = 1
 RETRY_TEMP_BUMP      = -0.10
-WEB_SEARCH_RESULTS   = 4
-WEB_SNIPPET_LEN      = 250
+WEB_SEARCH_RESULTS   = 10
+WEB_SNIPPET_LEN      = 300
 
 # ── Topic sections ───────────────────────────────────────────────────────────
 _TOPIC_SECTIONS: dict[str, str] = {

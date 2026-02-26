@@ -332,45 +332,160 @@ def _encode_image_base64(path: pathlib.Path) -> str:
     return f"data:{mime.get(ext, 'application/octet-stream')};base64,{data}"
 
 
-def ask_image() -> str | None:
+def _resolve_local_path(raw: str) -> str | None:
+    """Try to resolve *raw* as a local image path; return base64 or None."""
+    path = pathlib.Path(raw)
+    if not path.is_absolute():
+        path = _PROJECT_DIR / path
+    if path.is_file() and path.suffix.lower() in _IMAGE_EXTS:
+        success(f"Using local image: {Fore.CYAN}{path.name}{Style.RESET_ALL}")
+        return _encode_image_base64(path)
+    return None
+
+
+def ask_images(prompt_label: str = "Reference images") -> list[str]:
     """
-    Interactive helper: let the user pick an image from images/ folder,
-    enter a URL, or skip entirely.  Returns a URL string or None.
+    Let the user pick one or more reference images for a scene.
+    - questionary available: checkbox UI with arrow keys + space to select.
+    - fallback: numbered menu with comma-separated input.
+    - no images/ folder: free-entry for URLs/paths line by line.
+    Returns a list of resolved URL/data-URI strings (may be empty).
     """
     images = _list_images()
+    selected: list[str] = []
 
     if images:
-        print(f"\n  {Fore.WHITE}{Style.BRIGHT}Reference image (for image-to-video):{Style.RESET_ALL}")
-        print(f"    {Fore.YELLOW}{Style.BRIGHT} 0){Style.RESET_ALL}  No image — text-to-video  {Style.DIM}(default){Style.RESET_ALL}")
-        for i, img in enumerate(images, 1):
-            print(f"     {Fore.YELLOW}{Style.BRIGHT}{i:>2}){Style.RESET_ALL}  {img.name}")
-        print(f"     {Fore.YELLOW}{Style.BRIGHT}{len(images) + 1:>2}){Style.RESET_ALL}  Enter a URL manually")
+        n_url  = len(images) + 1
+        n_path = len(images) + 2
 
+        def _prompt_url() -> str | None:
+            url = input(f"  {Fore.YELLOW}▸{Style.RESET_ALL} Image URL: ").strip()
+            return url if url else None
+
+        def _prompt_path() -> str | None:
+            p = input(
+                f"  {Fore.YELLOW}▸{Style.RESET_ALL} File path "
+                f"{Style.DIM}(relative to project root){Style.RESET_ALL}: "
+            ).strip()
+            if not p:
+                return None
+            result = _resolve_local_path(p)
+            if not result:
+                error(f"File not found or unsupported image: {p}")
+            return result
+
+        if HAS_QUESTIONARY:
+            # ── Arrow-key checkbox UI ─────────────────────────────────────
+            choices = [Choice(title="No image  (text-to-video)", value="0")]
+            for i, img in enumerate(images, 1):
+                choices.append(Choice(title=img.name, value=str(i)))
+            choices.append(Choice(title="Enter a URL",            value="url"))
+            choices.append(Choice(title="Enter a local file path", value="path"))
+
+            picks = questionary.checkbox(
+                prompt_label,
+                choices=choices,
+                style=_Q_STYLE,
+                instruction="(↑↓ to move, space to select, enter to confirm)",
+            ).ask()
+
+            if picks is None:
+                raise KeyboardInterrupt
+
+            for pick in picks:
+                if pick == "0" or pick is None:
+                    continue
+                elif pick == "url":
+                    url = _prompt_url()
+                    if url:
+                        selected.append(url)
+                elif pick == "path":
+                    p = _prompt_path()
+                    if p:
+                        selected.append(p)
+                else:
+                    selected.append(_encode_image_base64(images[int(pick) - 1]))
+
+        else:
+            # ── Fallback: numbered menu + comma-separated input ───────────
+            def _resolve_token(token: str) -> None:
+                token = token.strip()
+                if not token or token == "0":
+                    return
+                if token.startswith(("http://", "https://", "data:")):
+                    selected.append(token)
+                    return
+                local = _resolve_local_path(token)
+                if local:
+                    selected.append(local)
+                    return
+                try:
+                    idx = int(token)
+                    if idx == 0:
+                        return
+                    if 1 <= idx <= len(images):
+                        selected.append(_encode_image_base64(images[idx - 1]))
+                    elif idx == n_url:
+                        url = _prompt_url()
+                        if url:
+                            selected.append(url)
+                    elif idx == n_path:
+                        p = _prompt_path()
+                        if p:
+                            selected.append(p)
+                    else:
+                        error(f"Please enter 0–{n_path}.")
+                except ValueError:
+                    error(f"Unrecognised input: '{token}'")
+
+            print(f"\n  {Fore.WHITE}{Style.BRIGHT}{prompt_label}:{Style.RESET_ALL}")
+            print(f"  {Style.DIM}Enter number(s) separated by commas, a URL, or blank to skip.{Style.RESET_ALL}")
+            print(f"     {Fore.YELLOW}{Style.BRIGHT} 0){Style.RESET_ALL}  No image  {Style.DIM}(text-to-video){Style.RESET_ALL}")
+            for i, img in enumerate(images, 1):
+                print(f"     {Fore.YELLOW}{Style.BRIGHT}{i:>2}){Style.RESET_ALL}  {img.name}")
+            print(f"     {Fore.YELLOW}{Style.BRIGHT}{n_url:>2}){Style.RESET_ALL}  Enter a URL")
+            print(f"     {Fore.YELLOW}{Style.BRIGHT}{n_path:>2}){Style.RESET_ALL}  Enter a local file path")
+
+            raw = input(
+                f"\n  {Fore.YELLOW}▸{Style.RESET_ALL} Selection "
+                f"{Style.DIM}[0 or blank = skip]{Style.RESET_ALL}: "
+            ).strip()
+            if raw and raw != "0":
+                for token in raw.split(","):
+                    _resolve_token(token)
+
+            if selected:
+                while True:
+                    more = input(
+                        f"  {Style.DIM}✔ {len(selected)} selected.  "
+                        f"Add more?{Style.RESET_ALL} "
+                        f"{Style.DIM}[number/URL/path or blank = done]{Style.RESET_ALL}: "
+                    ).strip()
+                    if not more:
+                        break
+                    _resolve_token(more)
+
+    else:
+        # No images/ folder — free-entry for URLs and paths
+        print(f"\n  {Fore.WHITE}{Style.BRIGHT}{prompt_label}{Style.RESET_ALL}  "
+              f"{Style.DIM}(URL or file path — blank to skip){Style.RESET_ALL}")
         while True:
             raw = input(
-                f"\n  {Fore.YELLOW}▸{Style.RESET_ALL} Enter number or URL "
-                f"{Style.DIM}[0]{Style.RESET_ALL}: "
+                f"  {Fore.YELLOW}▸{Style.RESET_ALL} Image {len(selected) + 1} "
+                f"{Style.DIM}[blank = done]{Style.RESET_ALL}: "
             ).strip()
-            if not raw or raw == "0":
-                return None
+            if not raw:
+                break
             if raw.startswith(("http://", "https://", "data:")):
-                return raw
-            try:
-                idx = int(raw) - 1
-                if 0 <= idx < len(images):
-                    return _encode_image_base64(images[idx])
-                if idx == len(images):
-                    url = input(f"  {Fore.YELLOW}▸{Style.RESET_ALL} Image URL: ").strip()
-                    return url if url else None
-            except ValueError:
-                pass
-            error(f"Please enter 0–{len(images) + 1} or a URL.")
-    else:
-        raw = input(
-            f"\n  {Fore.WHITE}{Style.BRIGHT}Reference image URL{Style.RESET_ALL} "
-            f"{Style.DIM}(blank to skip){Style.RESET_ALL}: "
-        ).strip()
-        return raw if raw else None
+                selected.append(raw)
+            else:
+                local = _resolve_local_path(raw)
+                if local:
+                    selected.append(local)
+                else:
+                    error(f"Not a valid URL or image file: {raw}")
+
+    return selected
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -405,7 +520,14 @@ def confirm_settings(cfg: dict) -> bool:
     info("Duration", f"{cfg['duration']}s")
     info("Mode",     f"{'1080P' if cfg['mode'] == 'pro' else '720P'}  {Style.DIM}({cfg['mode']}){Style.RESET_ALL}")
     info("Sound",    f"{'on' if cfg['sound'] else 'off'}")
-    info("Image",    "attached" if cfg.get("image_url") else "none (text-to-video)")
+    
+    scene_images = cfg.get("image_urls", [])
+    total_images = sum(len(s) for s in scene_images)
+    if total_images:
+        scenes_with = sum(1 for s in scene_images if s)
+        info("Images", f"{total_images} across {scenes_with} scene(s)")
+    else:
+        info("Image", "none (text-to-video)")
 
     divider()
 
@@ -444,7 +566,7 @@ def configure_interactively() -> dict:
     user_prompts: list[str] = []
 
     if pipeline == "auto":
-        section("STEP 1 / 3 — News source")
+        section("STEP 1 / 4 — News source")
         print_region_table()
         region = ask_free(
             "Which region? (enter the 2-letter code)", default="US",
@@ -472,47 +594,47 @@ def configure_interactively() -> dict:
             },
         )
     else:
-        section("STEP 1 / 3 — Your scene concepts")
+        section("STEP 1 / 4 — Your scene concepts")
         user_prompts = ask_prompts()
 
     # ── Section 2: Prompt style ───────────────────────────────────────────────
-    section("STEP 2 / 3 — Prompt style")
+    section("STEP 2 / 4 — Prompt style")
 
     style = ask_choice(
         "Visual style for the generated prompts:",
-        options=["cinematic", "documentary", "commercial", "noir", "abstract",
-                 "anime", "retro", "aerial", "cyberpunk", "minimalist"],
+        options=["cinematic", "documentary", "commercial", "comedy",
+                 "anime", "retro", "aerial", "cyberpunk", "horror", "minimalist"],
         default="cinematic",
         descriptions={
-            "cinematic":    "Film-quality, lens effects, shallow depth of field",
+            "cinematic":    "Film-quality narrative, lens effects, shallow depth of field",
             "documentary":  "Raw, handheld, observational, natural imperfections",
             "commercial":   "Polished, brand-ready, clean product-focused shots",
-            "noir":         "High-contrast B&W, deep shadows, venetian-blind light",
-            "abstract":     "Surreal, non-literal, conceptual visual metaphors",
+            "comedy":       "Bright, wide shots, exaggerated staging, expressive framing",
             "anime":        "Cel-shaded, vibrant colors, stylised exaggerated motion",
             "retro":        "Film grain, VHS artifacts, 70s/80s vintage color science",
             "aerial":       "Drone / bird's-eye, sweeping wide-angle landscapes",
             "cyberpunk":    "Neon-drenched, rain-slicked, holographic, dystopian urban",
+            "horror":       "Dutch angles, deep shadows, unsettling tight framing",
             "minimalist":   "Clean negative space, limited palette, geometric symmetry",
         },
     )
 
     mood = ask_choice(
         "Mood / tone:",
-        options=["dynamic", "serene", "tense", "euphoric", "dark",
-                 "inspirational", "mysterious", "nostalgic", "epic", "playful"],
-        default="dynamic",
+        options=["dramatic", "funny", "epic", "serene", "dark",
+                 "inspirational", "mysterious", "nostalgic", "tense", "playful"],
+        default="dramatic",
         descriptions={
-            "dynamic":       "Fast motion, energy, excitement",
+            "dramatic":      "Intense, high-stakes, powerful emotional weight",
+            "funny":         "Comedic, absurd, lighthearted and laugh-out-loud",
+            "epic":          "Grand scale, sweeping, monumental scope",
             "serene":        "Calm, peaceful, slow movement",
-            "tense":         "Suspense, unease, tight framing",
-            "euphoric":      "Joyful, vibrant, uplifting energy",
             "dark":          "Moody, shadowy, ominous atmosphere",
-            "inspirational": "Hopeful, grand, motivating tone",
+            "inspirational": "Hopeful, motivating, uplifting tone",
             "mysterious":    "Enigmatic, atmospheric, fog and haze",
             "nostalgic":     "Warm, wistful, memory-like softness",
-            "epic":          "Grand scale, sweeping, monumental scope",
-            "playful":       "Whimsical, lighthearted, bouncy motion",
+            "tense":         "Suspense, unease, tight framing",
+            "playful":       "Whimsical, bouncy, vibrant energy",
         },
     )
 
@@ -528,14 +650,14 @@ def configure_interactively() -> dict:
     research_query = ask_free(
         "Research topic for background info (optional):",
         default="",
-        note="Keywords or a short sentence — GLM will use these facts to enrich the prompts.\n"
-             "  e.g. 'Diagno Energy'  |  'CES 2026'  |  'Sydney housing market'\n"
-             "  e.g. 'Tesla new model launch Australia 2026'\n"
+        note="One search query — type all keywords on one line, space or comma separated.\n"
+             "  GLM will use the results to enrich the prompts.\n"
+             "  e.g.  Diagno Energy,  CES 2026 AI chips,  Tesla launch Australia 2026\n"
              "  Leave blank to skip.",
     ).strip()
 
     # ── Section 3: Video output ───────────────────────────────────────────────
-    section("STEP 3 / 3 — Video output")
+    section("STEP 3 / 4 — Video output")
 
     model = ask_choice(
         "Video model:", options=MODEL_NAMES, default="kling",
@@ -575,6 +697,15 @@ def configure_interactively() -> dict:
         },
     )
 
+    # ── Input images ──────────────────────────────────────────────────────────
+    section("STEP 4 / 4 — Reference images  (optional)")
+    print(f"  {Style.DIM}│ Select one or more images per scene, or skip for text-to-video.{Style.RESET_ALL}")
+
+    image_urls: list[list[str]] = []
+    for i in range(videos):
+        imgs = ask_images(prompt_label=f"Images for scene {i + 1} of {videos}")
+        image_urls.append(imgs)
+
     # ── Cost estimate ─────────────────────────────────────────────────────────
     if is_kie(model):
         _cps   = {"std": {"yes": 30, "no": 20}, "pro": {"yes": 40, "no": 27}}
@@ -600,9 +731,6 @@ def configure_interactively() -> dict:
             f" = {Style.RESET_ALL}{Fore.YELLOW}{Style.BRIGHT}${usd:.2f} USD{Style.RESET_ALL}"
         )
 
-    # ── Build config dict ─────────────────────────────────────────────────────
-    image_url = ask_image()
-
     cfg: dict = {
         "pipeline":     pipeline,
         "model":        model,
@@ -613,7 +741,7 @@ def configure_interactively() -> dict:
         "duration":     duration,
         "mode":         mode,
         "sound":        sound == "yes",
-        "image_url":    image_url,
+        "image_urls":   image_urls,
         "research":     research_query if research_query else None,
     }
 

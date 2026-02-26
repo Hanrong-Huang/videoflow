@@ -20,9 +20,12 @@ Pipeline:
 import os
 import sys
 import json
+import base64
 import pathlib
 import datetime
 import argparse
+import mimetypes
+import urllib.request
 
 from openai import OpenAI
 from colorama import init as _colorama_init, Fore, Style
@@ -31,6 +34,7 @@ from models import MODELS, MODEL_NAMES, is_openai, is_kie
 from cli import (
     banner, section, info, success, warn, error, step,
     confirm_settings, configure_interactively,
+    _encode_image_base64,
 )
 from prompts import (
     fetch_trending_topics, generate_prompts, enhance_prompts, web_search,
@@ -119,7 +123,9 @@ examples:
     p.add_argument("--sound",    action="store_true", default=None)
     p.add_argument("--no-sound", dest="sound", action="store_false")
     p.add_argument("--image",    default=None,
-                   help="Reference image URL or local file path")
+                   help="[Deprecated] Use --images instead")
+    p.add_argument("--images",   nargs="*", default=None,
+                   help="Reference image URLs or local paths (one per scene)")
     p.add_argument("--prompts",  nargs="+", default=None,
                    help="Scene prompts for manual mode (one per arg)")
     p.add_argument("--research", default=None,
@@ -132,24 +138,26 @@ def _cli_has_args(args: argparse.Namespace) -> bool:
     return any([
         args.preset, args.resume, args.pipeline, args.topic, args.style,
         args.mood, args.videos, args.prompts, args.region, args.language,
-        args.research,
+        args.research, args.image, args.images,
     ])
 
 
 def build_cfg_from_args(args: argparse.Namespace) -> dict:
     """Build a config dict from CLI args with sensible defaults."""
     pipeline = args.pipeline or "auto"
+    # Normalise --image (deprecated) + --images into list[list[str]]
+    flat = args.images if args.images else ([args.image] if args.image else [])
     cfg: dict = {
-        "pipeline":  pipeline,
-        "model":     args.model    or "kling",
-        "style":     args.style    or "cinematic",
-        "mood":      args.mood     or "dynamic",
-        "aspect":    args.aspect   or "16:9",
-        "duration":  args.duration or 5,
-        "mode":      args.mode     or "std",
-        "sound":     args.sound if args.sound is not None else True,
-        "image_url": args.image,
-        "research":  args.research,
+        "pipeline":   pipeline,
+        "model":      args.model    or "kling",
+        "style":      args.style    or "cinematic",
+        "mood":       args.mood     or "dramatic",
+        "aspect":     args.aspect   or "16:9",
+        "duration":   args.duration or 5,
+        "mode":       args.mode     or "std",
+        "sound":      args.sound if args.sound is not None else True,
+        "image_urls": [[url] for url in flat],
+        "research":   args.research,
     }
     if pipeline == "auto":
         cfg["region"]       = args.region       or "US"
@@ -182,13 +190,21 @@ def load_preset(path: str) -> dict:
     cfg.setdefault("pipeline", "auto")
     cfg.setdefault("model", "kling")
     cfg.setdefault("style", "cinematic")
-    cfg.setdefault("mood", "dynamic")
+    cfg.setdefault("mood", "dramatic")
     cfg.setdefault("aspect", "16:9")
     cfg.setdefault("duration", 5)
     cfg.setdefault("mode", "std")
     cfg.setdefault("sound", True)
-    cfg.setdefault("image_url", None)
     cfg.setdefault("research", None)
+    # Normalise image_urls to list[list[str]] (supports old flat-list presets)
+    imgs = cfg.pop("image_url", None)   # remove legacy singular key if present
+    raw_imgs = cfg.get("image_urls", [])
+    if raw_imgs and not isinstance(raw_imgs[0], list):
+        cfg["image_urls"] = [[u] if u else [] for u in raw_imgs]
+    elif not raw_imgs and imgs:
+        cfg["image_urls"] = [[imgs]]
+    else:
+        cfg.setdefault("image_urls", [])
     if cfg["pipeline"] == "auto":
         cfg.setdefault("region", "US")
         cfg.setdefault("language", "en")
@@ -250,6 +266,48 @@ def resume_from_manifest(path: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Image URL resolution — local paths → base64
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _resolve_image_url(raw: str | None) -> str | None:
+    """
+    Resolve any image reference to a base64 data URI.
+    - data: URI   → returned as-is (already encoded)
+    - http/https  → downloaded and base64-encoded
+    - local path  → read from disk and base64-encoded
+    Returns None if raw is None/empty.
+    """
+    if not raw:
+        return None
+    if raw.startswith("data:"):
+        return raw
+    if raw.startswith(("http://", "https://")):
+        success(f"Downloading image: {Fore.CYAN}{raw[:72]}{'…' if len(raw) > 72 else ''}{Style.RESET_ALL}")
+        try:
+            with urllib.request.urlopen(raw, timeout=60) as resp:
+                data = resp.read()
+                content_type = resp.headers.get_content_type() or ""
+        except Exception as exc:
+            error(f"Failed to download image: {exc}")
+            sys.exit(1)
+        if not content_type.startswith("image/"):
+            # Fall back to guessing from URL
+            guessed, _ = mimetypes.guess_type(raw.split("?")[0])
+            content_type = guessed or "image/jpeg"
+        encoded = base64.b64encode(data).decode()
+        return f"data:{content_type};base64,{encoded}"
+    # Treat as a local file path
+    path = pathlib.Path(raw)
+    if not path.is_absolute():
+        path = _PROJECT_DIR / path
+    if not path.is_file():
+        error(f"Image file not found: {path}")
+        sys.exit(1)
+    success(f"Encoding local image: {Fore.CYAN}{path.name}{Style.RESET_ALL}")
+    return _encode_image_base64(path)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -290,7 +348,20 @@ def main() -> None:
         "sound":        cfg["sound"],
         "multi_shots":  False,
     }
-    image_url = cfg.get("image_url")
+    
+    # ── Resolve images ────────────────────────────────────────────────────────
+    # image_urls is already list[list[str]] (normalised by wizard/load_preset/
+    # build_cfg_from_args). Just resolve any local paths to base64.
+    num_vids = cfg.get("videos", 1)
+    image_urls: list[list[str]] = [
+        [r for url in scene if (r := _resolve_image_url(url))]
+        for scene in cfg.get("image_urls", [])
+    ]
+    # Pad or truncate to match video count
+    if len(image_urls) < num_vids:
+        image_urls += [[]] * (num_vids - len(image_urls))
+    else:
+        image_urls = image_urls[:num_vids]
 
     # ── Optional: Web research ───────────────────────────────────────────────
     research_query = cfg.get("research")
@@ -353,12 +424,14 @@ def main() -> None:
          f"{Fore.CYAN}{cfg['aspect']}{Style.RESET_ALL}  "
          f"{Fore.CYAN}{cfg['duration']}s{Style.RESET_ALL}  "
          f"mode={Fore.CYAN}{cfg['mode']}{Style.RESET_ALL}"
-         f"{f'  image={Fore.CYAN}attached{Style.RESET_ALL}' if image_url else ''}")
+         f"{f'  {Fore.CYAN}images attached{Style.RESET_ALL}' if any(image_urls) else ''}")
 
     tasks: list[tuple[str, str]] = []
     for i, prompt in enumerate(prompts, 1):
         try:
-            task_id = submit_task(prompt, video_cfg, model, image_url=image_url)
+            scene_imgs = image_urls[i - 1]  # list[str], may be empty
+            task_id = submit_task(prompt, video_cfg, model,
+                                  image_urls=scene_imgs if scene_imgs else None)
             success(f"Task {i} submitted → {Style.DIM}{task_id}{Style.RESET_ALL}")
             tasks.append((task_id, prompt))
         except Exception as exc:
