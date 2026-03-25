@@ -143,15 +143,22 @@ def create_video_task(prompt: str, video_cfg: dict,
 
     # Build model-specific input block
     if model == "sora-kie":
+        if image_urls and len(image_urls) > 1:
+            warn("sora-kie accepts one direct reference image; using the first image only.")
+            image_urls = image_urls[:1]
+        if image_urls:
+            api_model = "sora-2-pro-image-to-video"
         _ar_map = {"16:9": "landscape", "9:16": "portrait", "1:1": "square"}
         input_block: dict = {
             "prompt":           prompt,
             "aspect_ratio":     _ar_map.get(video_cfg["aspect_ratio"], "landscape"),
             "n_frames":         str(video_cfg["duration"]),
-            "size":             "high" if video_cfg["mode"] == "pro" else "low",
+            "size":             "high" if video_cfg["mode"] == "pro" else "standard",
             "remove_watermark": True,
             "upload_method":    "s3",
         }
+        if image_urls:
+            input_block["image_urls"] = image_urls
     else:  # kling (and future createTask models)
         input_block = {
             "prompt":          prompt,
@@ -446,6 +453,8 @@ def create_sora_openai_task(prompt: str, video_cfg: dict,
         "size":    size,
     }
     if image_urls:
+        if len(image_urls) > 1:
+            warn("OpenAI Sora accepts one direct reference image; using the first image only.")
         # Sora requires the reference image to exactly match the video dimensions.
         # Decode the data URI, resize with Pillow, re-encode as JPEG bytes.
         from PIL import Image as _PilImage

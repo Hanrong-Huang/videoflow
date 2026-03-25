@@ -1,6 +1,6 @@
 """
-prompts.py — GLM-4.7 prompt generation, news fetching, and web research
-=======================================================================
+prompts.py — glm-5 prompt generation, news fetching, and web research
+=====================================================================
 Handles:
   - Google News RSS fetching
   - Web search for background research (DuckDuckGo)
@@ -32,7 +32,11 @@ HTTP_TIMEOUT_SEC     = 15
 MAX_JSON_RETRIES     = 1
 RETRY_TEMP_BUMP      = -0.10
 WEB_SEARCH_RESULTS   = 10
-WEB_SNIPPET_LEN      = 300
+WEB_SNIPPET_LEN      = 500
+GLM_MODEL            = "glm-5"
+GLM_LABEL            = "glm-5"
+VISION_MODEL         = "glm-4.6v"
+VISION_MAX_TOKENS    = 1200
 
 # ── Topic sections ───────────────────────────────────────────────────────────
 _TOPIC_SECTIONS: dict[str, str] = {
@@ -57,7 +61,7 @@ class _GlmSpinner:
 
     _FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
-    def __init__(self, message: str = "GLM-4.7 thinking"):
+    def __init__(self, message: str = f"{GLM_LABEL} thinking"):
         self._msg = message
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -206,6 +210,28 @@ def _research_context_block(research: list[dict]) -> str:
         lines.append(f"{i}. {r['title']}")
         if r.get("snippet"):
             lines.append(f"   {r['snippet']}")
+    return "\n".join(lines)
+
+
+def _scene_image_context_block(scene_image_briefs: list[str] | None) -> str:
+    """Format per-scene image briefs for injection into prompt generation."""
+    if not scene_image_briefs:
+        return ""
+    lines = ["\n\nREFERENCE IMAGE NOTES:"]
+    found = False
+    for i, brief in enumerate(scene_image_briefs, 1):
+        if not brief:
+            continue
+        found = True
+        lines.append(f"{i}. Prompt {i} should respect this visual reference:")
+        lines.append(f"   {brief}")
+    if not found:
+        return ""
+    lines.append(
+        "For any prompt with a reference image note, preserve the subject identity, "
+        "wardrobe/material details, environment cues, palette, and composition anchor "
+        "unless the scene concept explicitly overrides them."
+    )
     return "\n".join(lines)
 
 
@@ -436,6 +462,90 @@ QUALITY RULES
 - Return ONLY a raw JSON array of {count} strings. No markdown, no explanation."""
 
 
+def _format_image_brief(summary: dict, image_count: int) -> str:
+    """Convert a vision-model JSON summary into a compact scene brief."""
+    parts: list[str] = []
+    fields = [
+        ("subject", "subject"),
+        ("environment", "environment"),
+        ("lighting", "lighting"),
+        ("palette", "palette"),
+        ("composition", "composition"),
+        ("continuity_constraints", "continuity"),
+        ("motion_cues", "motion"),
+    ]
+    for key, label in fields:
+        value = str(summary.get(key, "") or "").strip()
+        if value:
+            parts.append(f"{label}: {value}")
+    if not parts:
+        return ""
+    return f"{image_count} image(s); " + "; ".join(parts)
+
+
+def analyze_reference_images(vision_client: OpenAI | None,
+                             scene_images: list[list[str]]) -> list[str]:
+    """
+    Analyze one or more reference images per scene and return one brief per scene.
+    Falls back gracefully if vision analysis fails.
+    """
+    briefs: list[str] = []
+    if vision_client is None:
+        return ["" for _ in scene_images]
+
+    system_msg = (
+        "You analyze reference images for AI video generation. Return raw JSON only. "
+        "Use this exact schema with string values: "
+        '{"subject":"","environment":"","lighting":"","palette":"","composition":"",'
+        '"continuity_constraints":"","motion_cues":""}. '
+        "Describe only what should be preserved or animated in the final video."
+    )
+
+    for idx, images in enumerate(scene_images, 1):
+        if not images:
+            briefs.append("")
+            continue
+
+        content: list[dict] = [
+            {
+                "type": "text",
+                "text": (
+                    f"These are {len(images)} reference image(s) for scene {idx}. "
+                    "Summarize the visual facts that the downstream video prompt must preserve. "
+                    "If multiple images differ, note the shared identity/style first and then the key differences."
+                ),
+            }
+        ]
+        for url in images:
+            content.append({"type": "image_url", "image_url": {"url": url}})
+
+        try:
+            with _GlmSpinner(f"Analyzing reference images for scene {idx}"):
+                response = vision_client.chat.completions.create(
+                    model=VISION_MODEL,
+                    messages=[
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": content},
+                    ],
+                    temperature=0.1,
+                    max_tokens=VISION_MAX_TOKENS,
+                )
+            raw = (response.choices[0].message.content or "").strip()
+            raw = _strip_json_fences(raw)
+            summary = json.loads(raw)
+            brief = _format_image_brief(summary, len(images))
+            briefs.append(brief)
+            if brief:
+                success(f"Scene {idx} reference summary ready")
+            else:
+                warn(f"Scene {idx} reference images produced an empty summary")
+        except Exception as exc:
+            warn(f"Scene {idx} reference analysis failed: {exc}")
+            briefs.append("")
+
+    return briefs
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Prompt generation (auto mode)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -443,9 +553,10 @@ QUALITY RULES
 def generate_prompts(zai_client: OpenAI, articles: list[dict], count: int,
                      style: str, mood: str, duration: int,
                      sound: bool,
-                     research: list[dict] | None = None) -> list[str]:
+                     research: list[dict] | None = None,
+                     scene_image_briefs: list[str] | None = None) -> list[str]:
     """
-    Ask GLM-4.7 to select the best articles and write one AI video prompt
+    Ask glm-5 to select the best articles and write one AI video prompt
     per selected story.  Includes retry logic for JSON parsing.
     Optionally accepts web research results for richer context.
     """
@@ -457,14 +568,21 @@ def generate_prompts(zai_client: OpenAI, articles: list[dict], count: int,
         for i, a in enumerate(articles, 1)
     )
     research_block = _research_context_block(research or [])
+    image_block = _scene_image_context_block(scene_image_briefs)
+    image_instruction = (
+        " For prompt i, if reference image note i exists above, make that prompt visually "
+        "faithful to that note."
+        if image_block else ""
+    )
     user_msg = (
         f"News articles pool ({len(articles)} total):\n\n{articles_text}"
-        f"{research_block}\n\n"
+        f"{research_block}{image_block}\n\n"
         f"Select the {count} most visually compelling stories and write one "
-        f"AI video prompt for each. Return a JSON array of {count} strings only."
+        f"AI video prompt for each.{image_instruction} "
+        f"Return a JSON array of {count} strings only."
     )
 
-    prompts = _call_glm(zai_client, system_msg, user_msg, "GLM-4.7 thinking")
+    prompts = _call_glm(zai_client, system_msg, user_msg, f"{GLM_LABEL} thinking")
     for i, p in enumerate(prompts, 1):
         print(f"\n  {Fore.CYAN}{Style.BRIGHT}Prompt {i}{Style.RESET_ALL}")
         print(_wrap(p))
@@ -474,7 +592,8 @@ def generate_prompts(zai_client: OpenAI, articles: list[dict], count: int,
 def enhance_prompts(zai_client: OpenAI, user_concepts: list[str],
                     style: str, mood: str, duration: int,
                     sound: bool,
-                    research: list[dict] | None = None) -> list[str]:
+                    research: list[dict] | None = None,
+                    scene_image_briefs: list[str] | None = None) -> list[str]:
     """
     Enhance the user's raw scene concepts into production-ready prompts.
     Optionally accepts web research results for richer context.
@@ -484,14 +603,19 @@ def enhance_prompts(zai_client: OpenAI, user_concepts: list[str],
 
     concepts_text = "\n".join(f"{i}. {c}" for i, c in enumerate(user_concepts, 1))
     research_block = _research_context_block(research or [])
+    image_block = _scene_image_context_block(scene_image_briefs)
+    image_instruction = (
+        " For concept i, if reference image note i exists above, preserve it in the enhanced prompt."
+        if image_block else ""
+    )
     user_msg = (
         f"My scene concepts ({count} total):\n\n{concepts_text}"
-        f"{research_block}\n\n"
-        f"Enhance each concept into a production-ready AI video prompt. "
+        f"{research_block}{image_block}\n\n"
+        f"Enhance each concept into a production-ready AI video prompt.{image_instruction} "
         f"Return a JSON array of {count} strings only."
     )
 
-    prompts = _call_glm(zai_client, system_msg, user_msg, "GLM-4.7 enhancing")
+    prompts = _call_glm(zai_client, system_msg, user_msg, f"{GLM_LABEL} enhancing")
 
     for i, (original, enhanced) in enumerate(zip(user_concepts, prompts), 1):
         print(f"\n  {Fore.CYAN}{Style.BRIGHT}Prompt {i}{Style.RESET_ALL}")
@@ -520,7 +644,7 @@ def _call_glm(zai_client: OpenAI, system_msg: str, user_msg: str,
         try:
             with _GlmSpinner(spinner_label):
                 response = zai_client.chat.completions.create(
-                    model="glm-4.7",
+                    model=GLM_MODEL,
                     messages=messages,
                     temperature=temp,
                     max_tokens=PROMPT_MAX_TOKENS,

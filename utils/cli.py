@@ -80,6 +80,19 @@ REGIONS: dict[str, list[tuple[str, str]]] = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 W = 64  # total banner width
+BACK_VALUE = "__back__"
+
+
+class BackRequest(Exception):
+    """Raised when the user wants to return to the previous wizard step."""
+
+
+def _check_back(raw: str, allow_back: bool) -> str:
+    """Normalize raw input and raise BackRequest on a back command."""
+    raw = raw.strip()
+    if allow_back and raw.lower() == "back":
+        raise BackRequest
+    return raw
 
 
 def banner(title: str, subtitle: str = "") -> None:
@@ -170,7 +183,8 @@ def print_region_table() -> None:
 
 def ask_choice(prompt: str, options: list[str], default: str,
                descriptions: dict[str, str] | None = None,
-               allow_freetext: bool = False) -> str:
+               allow_freetext: bool = False,
+               allow_back: bool = False) -> str:
     """
     Show a list of options and return the user's pick.
     Uses arrow-key navigation if questionary is installed,
@@ -185,6 +199,8 @@ def ask_choice(prompt: str, options: list[str], default: str,
             choices.append(Choice(title=label, value=opt))
         if allow_freetext:
             choices.append(Choice(title="Other (type a keyword)", value="__freetext__"))
+        if allow_back:
+            choices.append(Choice(title="← Back  [b]", value=BACK_VALUE, shortcut_key="b"))
 
         result = questionary.select(
             prompt,
@@ -192,15 +208,23 @@ def ask_choice(prompt: str, options: list[str], default: str,
             default=default,
             style=_Q_STYLE,
             use_indicator=True,
-            use_shortcuts=False,
+            use_shortcuts=allow_back,
             use_jk_keys=True,
-            instruction="(↑↓ arrows or j/k to move, enter to select)",
+            instruction="(↑↓ or j/k move, enter select, b back)",
         ).ask()
 
         if result is None:  # Ctrl+C
             raise KeyboardInterrupt
+        if result == BACK_VALUE:
+            raise BackRequest
         if result == "__freetext__":
-            raw = input(f"  {Fore.YELLOW}▸{Style.RESET_ALL} Enter keyword: ").strip()
+            raw = _check_back(
+                input(
+                    f"  {Fore.YELLOW}▸{Style.RESET_ALL} Enter keyword "
+                    f"{Style.DIM}[type 'back' to return]{Style.RESET_ALL}: "
+                ),
+                allow_back,
+            )
             if raw:
                 print(f"  {Style.DIM}→ Using '{raw}' as a keyword search{Style.RESET_ALL}")
                 return raw
@@ -214,12 +238,17 @@ def ask_choice(prompt: str, options: list[str], default: str,
         desc   = f"  {Style.DIM}— {descriptions[opt]}{Style.RESET_ALL}" if descriptions and opt in descriptions else ""
         dflt   = f"  {Fore.GREEN}(default){Style.RESET_ALL}" if opt == default else ""
         print(f"    {marker}{Style.BRIGHT}{i:>2}){Style.RESET_ALL}  {Fore.WHITE}{opt:<16}{Style.RESET_ALL}{desc}{dflt}")
+    if allow_back:
+        print(f"    {Style.DIM}Type 'back' to return to the previous step.{Style.RESET_ALL}")
 
     while True:
-        raw = input(
-            f"\n  {Fore.YELLOW}▸{Style.RESET_ALL} Enter number or value "
-            f"{Style.DIM}[{default}]{Style.RESET_ALL}: "
-        ).strip()
+        raw = _check_back(
+            input(
+                f"\n  {Fore.YELLOW}▸{Style.RESET_ALL} Enter number or value "
+                f"{Style.DIM}[{default}]{Style.RESET_ALL}: "
+            ),
+            allow_back,
+        )
 
         if not raw:
             return default
@@ -236,26 +265,38 @@ def ask_choice(prompt: str, options: list[str], default: str,
         return raw
 
 
-def ask_free(prompt: str, default: str, note: str = "") -> str:
+def ask_free(prompt: str, default: str, note: str = "",
+             allow_back: bool = False) -> str:
     """Prompt for a free-text value; shows a note line if provided."""
     print(f"\n  {Fore.WHITE}{Style.BRIGHT}{prompt}{Style.RESET_ALL}")
     if note:
         print(f"  {Style.DIM}{note}{Style.RESET_ALL}")
-    raw = input(
-        f"  {Fore.YELLOW}▸{Style.RESET_ALL} Enter value "
-        f"{Style.DIM}[{default}]{Style.RESET_ALL}: "
-    ).strip()
+    if allow_back:
+        print(f"  {Style.DIM}Type 'back' to return to the previous step.{Style.RESET_ALL}")
+    raw = _check_back(
+        input(
+            f"  {Fore.YELLOW}▸{Style.RESET_ALL} Enter value "
+            f"{Style.DIM}[{default}]{Style.RESET_ALL}: "
+        ),
+        allow_back,
+    )
     return raw if raw else default
 
 
-def ask_int(prompt: str, default: int, min_val: int, max_val: int) -> int:
+def ask_int(prompt: str, default: int, min_val: int, max_val: int,
+            allow_back: bool = False) -> int:
     """Prompt for an integer within [min_val, max_val]."""
     print(f"\n  {Fore.WHITE}{Style.BRIGHT}{prompt}{Style.RESET_ALL}")
+    if allow_back:
+        print(f"  {Style.DIM}Type 'back' to return to the previous step.{Style.RESET_ALL}")
     while True:
-        raw = input(
-            f"  {Fore.YELLOW}▸{Style.RESET_ALL} Enter number "
-            f"{Style.DIM}[{default}] range {min_val}–{max_val}{Style.RESET_ALL}: "
-        ).strip()
+        raw = _check_back(
+            input(
+                f"  {Fore.YELLOW}▸{Style.RESET_ALL} Enter number "
+                f"{Style.DIM}[{default}] range {min_val}–{max_val}{Style.RESET_ALL}: "
+            ),
+            allow_back,
+        )
         if not raw:
             return default
         try:
@@ -268,7 +309,7 @@ def ask_int(prompt: str, default: int, min_val: int, max_val: int) -> int:
         error(f"Please enter a number between {min_val} and {max_val}.")
 
 
-def ask_prompts() -> list[str]:
+def ask_prompts(allow_back: bool = False) -> list[str]:
     """
     Let the user type one or more scene concepts.
     One scene per entry → one video per scene (1:1).
@@ -279,6 +320,8 @@ def ask_prompts() -> list[str]:
     print(f"  {Style.DIM}One scene per entry = one video.  Each scene is enhanced by GLM.{Style.RESET_ALL}")
     print(f"  {Style.DIM}End a line with \\ to continue on the next line.{Style.RESET_ALL}")
     print(f"  {Style.DIM}Press Enter on an empty line when done.{Style.RESET_ALL}")
+    if allow_back:
+        print(f"  {Style.DIM}Type 'back' on a new scene to return to the previous step.{Style.RESET_ALL}")
     prompts: list[str] = []
     while True:
         parts: list[str] = []
@@ -291,6 +334,13 @@ def ask_prompts() -> list[str]:
             )
             raw = input(label).rstrip()
             first = False
+            if allow_back and first is False and not parts and raw.strip().lower() == "back":
+                if prompts:
+                    removed = prompts.pop()
+                    warn(f"Removed previous scene: {removed[:60]}{'…' if len(removed) > 60 else ''}")
+                    first = True
+                    continue
+                raise BackRequest
             if raw.endswith("\\"):
                 parts.append(raw[:-1].strip())
                 continue
@@ -343,7 +393,8 @@ def _resolve_local_path(raw: str) -> str | None:
     return None
 
 
-def ask_images(prompt_label: str = "Reference images") -> list[str]:
+def ask_images(prompt_label: str = "Reference images",
+               allow_back: bool = False) -> list[str]:
     """
     Let the user pick one or more reference images for a scene.
     - questionary available: checkbox UI with arrow keys + space to select.
@@ -358,15 +409,48 @@ def ask_images(prompt_label: str = "Reference images") -> list[str]:
         n_url  = len(images) + 1
         n_path = len(images) + 2
 
+        def _clean_pasted_value(raw: str) -> str:
+            """Trim whitespace and optional wrapping quotes from pasted input."""
+            raw = raw.strip()
+            if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {"'", '"'}:
+                return raw[1:-1].strip()
+            return raw
+
         def _prompt_url() -> str | None:
-            url = input(f"  {Fore.YELLOW}▸{Style.RESET_ALL} Image URL: ").strip()
+            print(
+                f"  {Style.DIM}Paste the full image URL, then press Enter."
+                f"{Style.RESET_ALL}"
+            )
+            print(
+                f"  {Style.DIM}Example: https://example.com/reference.jpg"
+                f"{Style.RESET_ALL}"
+            )
+            url = _clean_pasted_value(
+                input(
+                    f"  {Fore.YELLOW}▸{Style.RESET_ALL} Image URL "
+                    f"{Style.DIM}[blank = cancel]{Style.RESET_ALL}: "
+                )
+            )
             return url if url else None
 
         def _prompt_path() -> str | None:
-            p = input(
-                f"  {Fore.YELLOW}▸{Style.RESET_ALL} File path "
-                f"{Style.DIM}(relative to project root){Style.RESET_ALL}: "
-            ).strip()
+            print(
+                f"  {Style.DIM}Paste a local image path, then press Enter."
+                f"{Style.RESET_ALL}"
+            )
+            print(
+                f"  {Style.DIM}Project root: {_PROJECT_DIR}{Style.RESET_ALL}"
+            )
+            print(
+                f"  {Style.DIM}Examples: images/cat.png  |  C:\\Users\\name\\Desktop\\cat.png"
+                f"{Style.RESET_ALL}"
+            )
+            p = _clean_pasted_value(
+                input(
+                    f"  {Fore.YELLOW}▸{Style.RESET_ALL} File path "
+                    f"{Style.DIM}[relative or absolute, blank = cancel]{Style.RESET_ALL}: "
+                )
+            )
             if not p:
                 return None
             result = _resolve_local_path(p)
@@ -375,36 +459,68 @@ def ask_images(prompt_label: str = "Reference images") -> list[str]:
             return result
 
         if HAS_QUESTIONARY:
-            # ── Arrow-key checkbox UI ─────────────────────────────────────
-            choices = [Choice(title="No image  (text-to-video)", value="0")]
-            for i, img in enumerate(images, 1):
-                choices.append(Choice(title=img.name, value=str(i)))
-            choices.append(Choice(title="Enter a URL",            value="url"))
-            choices.append(Choice(title="Enter a local file path", value="path"))
-
-            picks = questionary.checkbox(
-                prompt_label,
-                choices=choices,
-                style=_Q_STYLE,
-                instruction="(↑↓ to move, space to select, enter to confirm)",
-            ).ask()
-
-            if picks is None:
-                raise KeyboardInterrupt
-
-            for pick in picks:
-                if pick == "0" or pick is None:
-                    continue
-                elif pick == "url":
-                    url = _prompt_url()
-                    if url:
-                        selected.append(url)
-                elif pick == "path":
-                    p = _prompt_path()
-                    if p:
-                        selected.append(p)
+            # ── Arrow-key action menu + direct text input ────────────────
+            while True:
+                title = prompt_label
+                if selected:
+                    title += f"  [{len(selected)} selected]"
                 else:
-                    selected.append(_encode_image_base64(images[int(pick) - 1]))
+                    title += "  [add images one by one]"
+
+                choices = []
+                if allow_back:
+                    choices.append(Choice(title="← Back  [b]", value=BACK_VALUE, shortcut_key="b"))
+                if not selected:
+                    choices.append(Choice(title="No image  (text-to-video)", value="done"))
+                else:
+                    choices.append(Choice(title="Done", value="done"))
+                choices.append(Choice(title="Paste image URL...", value="url"))
+                choices.append(Choice(title="Paste local file path...", value="path"))
+                for i, img in enumerate(images, 1):
+                    choices.append(Choice(title=f"{img.name}", value=str(i)))
+
+                pick = questionary.select(
+                    title,
+                    choices=choices,
+                    style=_Q_STYLE,
+                    use_indicator=True,
+                    use_shortcuts=allow_back,
+                    use_jk_keys=True,
+                    instruction="(↑↓ or j/k move, enter add/select, b back; add multiple images one by one)",
+                ).ask()
+
+                if pick is None:
+                    raise KeyboardInterrupt
+                if pick == BACK_VALUE:
+                    raise BackRequest
+                if pick == "done":
+                    break
+                if pick == "url":
+                    url = questionary.text(
+                        "Image URL",
+                        style=_Q_STYLE,
+                        instruction="Paste the full image URL, then press Enter",
+                    ).ask()
+                    if url:
+                        selected.append(_clean_pasted_value(url))
+                    continue
+                if pick == "path":
+                    raw_path = questionary.text(
+                        "Local file path",
+                        style=_Q_STYLE,
+                        instruction=(
+                            f"Relative to project root or absolute path. "
+                            f"Example: images/cat.png  |  {_PROJECT_DIR}"
+                        ),
+                    ).ask()
+                    if raw_path:
+                        result = _resolve_local_path(_clean_pasted_value(raw_path))
+                        if result:
+                            selected.append(result)
+                        else:
+                            error(f"File not found or unsupported image: {raw_path}")
+                    continue
+                selected.append(_encode_image_base64(images[int(pick) - 1]))
 
         else:
             # ── Fallback: numbered menu + comma-separated input ───────────
@@ -450,6 +566,8 @@ def ask_images(prompt_label: str = "Reference images") -> list[str]:
                 f"\n  {Fore.YELLOW}▸{Style.RESET_ALL} Selection "
                 f"{Style.DIM}[0 or blank = skip]{Style.RESET_ALL}: "
             ).strip()
+            if allow_back and raw.lower() == "back":
+                raise BackRequest
             if raw and raw != "0":
                 for token in raw.split(","):
                     _resolve_token(token)
@@ -461,6 +579,8 @@ def ask_images(prompt_label: str = "Reference images") -> list[str]:
                         f"Add more?{Style.RESET_ALL} "
                         f"{Style.DIM}[number/URL/path or blank = done]{Style.RESET_ALL}: "
                     ).strip()
+                    if allow_back and more.lower() == "back":
+                        raise BackRequest
                     if not more:
                         break
                     _resolve_token(more)
@@ -474,6 +594,8 @@ def ask_images(prompt_label: str = "Reference images") -> list[str]:
                 f"  {Fore.YELLOW}▸{Style.RESET_ALL} Image {len(selected) + 1} "
                 f"{Style.DIM}[blank = done]{Style.RESET_ALL}: "
             ).strip()
+            if allow_back and raw.lower() == "back":
+                raise BackRequest
             if not raw:
                 break
             if raw.startswith(("http://", "https://", "data:")):
@@ -492,7 +614,7 @@ def ask_images(prompt_label: str = "Reference images") -> list[str]:
 # Settings confirmation — bordered table
 # ─────────────────────────────────────────────────────────────────────────────
 
-def confirm_settings(cfg: dict) -> bool:
+def confirm_settings(cfg: dict) -> str:
     """Show a bordered summary of all settings and ask for confirmation."""
     banner("REVIEW YOUR SETTINGS", "Confirm before spending API credits")
 
@@ -534,9 +656,13 @@ def confirm_settings(cfg: dict) -> bool:
     print()
     raw = input(
         f"  {Fore.GREEN}{Style.BRIGHT}▸ Start generating?{Style.RESET_ALL} "
-        f"{Style.DIM}[Y/n]{Style.RESET_ALL}: "
+        f"{Style.DIM}[Y = start / back = edit / n = cancel]{Style.RESET_ALL}: "
     ).strip().lower()
-    return raw in ("", "y", "yes")
+    if raw in ("", "y", "yes"):
+        return "start"
+    if raw == "back":
+        return "back"
+    return "cancel"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -550,209 +676,246 @@ def configure_interactively() -> dict:
     """
     banner("VideoFlow", "AI Video Generator v1.1")
     print(f"  {Style.DIM}  Press Enter at any prompt to accept the default value.{Style.RESET_ALL}")
+    print(f"  {Style.DIM}  Type 'back' to return to the previous step when available.{Style.RESET_ALL}")
     print(f"  {Style.DIM}  Press Ctrl+C at any time to quit.{Style.RESET_ALL}")
-
-    # ── Pipeline mode ─────────────────────────────────────────────────────────
-    pipeline = ask_choice(
-        "Pipeline mode:",
-        options=["auto", "manual"],
-        default="auto",
-        descriptions={
-            "auto":   "Trending news → GLM → AI video",
-            "manual": "Your scenes → GLM enhance → AI video",
-        },
-    )
-
-    user_prompts: list[str] = []
-
-    if pipeline == "auto":
-        section("STEP 1 / 4 — News source")
-        print_region_table()
-        region = ask_free(
-            "Which region? (enter the 2-letter code)", default="US",
-        ).upper()
-        language = ask_free(
-            "Language code?", default="en",
-            note="en English │ es Spanish │ fr French │ de German │ ja Japanese\n"
-                 "  zh Chinese │ ko Korean  │ pt Portuguese │ ar Arabic",
-        ).lower()
-        topic = ask_choice(
-            "Which news topic?",
-            options=list(_TOPIC_SECTIONS.keys()),
-            default="top",
-            allow_freetext=True,
-            descriptions={
-                "top":           "Top headlines across all categories",
-                "world":         "International news",
-                "nation":        "Domestic / national news",
-                "business":      "Finance, markets, economy",
-                "technology":    "Tech, AI, gadgets",
-                "entertainment": "Movies, music, culture",
-                "sports":        "All sports",
-                "science":       "Science & research",
-                "health":        "Health, medicine, wellness",
-            },
-        )
-    else:
-        section("STEP 1 / 4 — Your scene concepts")
-        user_prompts = ask_prompts()
-
-    # ── Section 2: Prompt style ───────────────────────────────────────────────
-    section("STEP 2 / 4 — Prompt style")
-
-    style = ask_choice(
-        "Visual style for the generated prompts:",
-        options=["cinematic", "documentary", "commercial", "comedy",
-                 "anime", "retro", "aerial", "cyberpunk", "horror", "minimalist"],
-        default="cinematic",
-        descriptions={
-            "cinematic":    "Film-quality narrative, lens effects, shallow depth of field",
-            "documentary":  "Raw, handheld, observational, natural imperfections",
-            "commercial":   "Polished, brand-ready, clean product-focused shots",
-            "comedy":       "Bright, wide shots, exaggerated staging, expressive framing",
-            "anime":        "Cel-shaded, vibrant colors, stylised exaggerated motion",
-            "retro":        "Film grain, VHS artifacts, 70s/80s vintage color science",
-            "aerial":       "Drone / bird's-eye, sweeping wide-angle landscapes",
-            "cyberpunk":    "Neon-drenched, rain-slicked, holographic, dystopian urban",
-            "horror":       "Dutch angles, deep shadows, unsettling tight framing",
-            "minimalist":   "Clean negative space, limited palette, geometric symmetry",
-        },
-    )
-
-    mood = ask_choice(
-        "Mood / tone:",
-        options=["dramatic", "funny", "epic", "serene", "dark",
-                 "inspirational", "mysterious", "nostalgic", "tense", "playful"],
-        default="dramatic",
-        descriptions={
-            "dramatic":      "Intense, high-stakes, powerful emotional weight",
-            "funny":         "Comedic, absurd, lighthearted and laugh-out-loud",
-            "epic":          "Grand scale, sweeping, monumental scope",
-            "serene":        "Calm, peaceful, slow movement",
-            "dark":          "Moody, shadowy, ominous atmosphere",
-            "inspirational": "Hopeful, motivating, uplifting tone",
-            "mysterious":    "Enigmatic, atmospheric, fog and haze",
-            "nostalgic":     "Warm, wistful, memory-like softness",
-            "tense":         "Suspense, unease, tight framing",
-            "playful":       "Whimsical, bouncy, vibrant energy",
-        },
-    )
-
-    if pipeline == "auto":
-        videos = ask_int(
-            "How many videos to generate?", default=3, min_val=1, max_val=10,
-        )
-    else:
-        videos = len(user_prompts)
-        print(f"\n  {Style.DIM}Videos: {videos} (one per scene concept){Style.RESET_ALL}")
-
-    # ── Optional: Web research ────────────────────────────────────────────────
-    research_query = ask_free(
-        "Research topic for background info (optional):",
-        default="",
-        note="One search query — type all keywords on one line, space or comma separated.\n"
-             "  GLM will use the results to enrich the prompts.\n"
-             "  e.g.  Diagno Energy,  CES 2026 AI chips,  Tesla launch Australia 2026\n"
-             "  Leave blank to skip.",
-    ).strip()
-
-    # ── Section 3: Video output ───────────────────────────────────────────────
-    section("STEP 3 / 4 — Video output")
-
-    model = ask_choice(
-        "Video model:", options=MODEL_NAMES, default="kling",
-        descriptions=model_descriptions(),
-    )
-
-    aspect = ask_choice(
-        "Aspect ratio:",
-        options=["16:9", "9:16", "1:1"],
-        default="16:9",
-        descriptions={
-            "16:9": "Landscape — YouTube, TV, desktop",
-            "9:16": "Vertical  — TikTok, Instagram Reels, Shorts",
-            "1:1":  "Square    — Instagram feed, general social",
-        },
-    )
-
-    duration = ask_int("Clip duration (seconds):", default=5, min_val=3, max_val=15)
-
-    mode = ask_choice(
-        "Render mode  (controls resolution & cost):",
-        options=["std", "pro"],
-        default="std",
-        descriptions={
-            "std": "720P  — faster & cheaper",
-            "pro": "1080P — higher quality",
-        },
-    )
-
-    sound = ask_choice(
-        "Auto-generated sound?:",
-        options=["yes", "no"],
-        default="yes",
-        descriptions={
-            "yes": "AI generates matching ambient / music audio",
-            "no":  "Silent video — lower cost",
-        },
-    )
-
-    # ── Input images ──────────────────────────────────────────────────────────
-    section("STEP 4 / 4 — Reference images  (optional)")
-    print(f"  {Style.DIM}│ Select one or more images per scene, or skip for text-to-video.{Style.RESET_ALL}")
-
-    image_urls: list[list[str]] = []
-    for i in range(videos):
-        imgs = ask_images(prompt_label=f"Images for scene {i + 1} of {videos}")
-        image_urls.append(imgs)
-
-    # ── Cost estimate ─────────────────────────────────────────────────────────
-    if is_kie(model):
-        _cps   = {"std": {"yes": 30, "no": 20}, "pro": {"yes": 40, "no": 27}}
-        cps    = _cps[mode][sound]
-        total  = cps * duration * videos
-        usd    = total * 0.005
-        print(
-            f"\n  {Style.DIM}Estimated cost: "
-            f"{cps} credits/sec × {duration}s × {videos} video(s)"
-            f" = {Style.RESET_ALL}{Fore.YELLOW}{Style.BRIGHT}{total} credits"
-            f"{Style.RESET_ALL}  {Style.DIM}(≈ ${usd:.2f} USD){Style.RESET_ALL}"
-        )
-    elif is_openai(model):
-        _sora_rate = {
-            "sora":     {"std": 0.10, "pro": 0.10},
-            "sora-pro": {"std": 0.30, "pro": 0.50},
-        }
-        rate = _sora_rate[model][mode]
-        usd  = rate * duration * videos
-        print(
-            f"\n  {Style.DIM}Estimated cost: "
-            f"${rate:.2f}/sec × {duration}s × {videos} video(s)"
-            f" = {Style.RESET_ALL}{Fore.YELLOW}{Style.BRIGHT}${usd:.2f} USD{Style.RESET_ALL}"
-        )
-
-    cfg: dict = {
-        "pipeline":     pipeline,
-        "model":        model,
-        "style":        style,
-        "mood":         mood,
-        "videos":       videos,
-        "aspect":       aspect,
-        "duration":     duration,
-        "mode":         mode,
-        "sound":        sound == "yes",
-        "image_urls":   image_urls,
-        "research":     research_query if research_query else None,
+    state: dict = {
+        "pipeline": "auto",
+        "region": "US",
+        "language": "en",
+        "topic": "top",
+        "user_prompts": [],
+        "style": "cinematic",
+        "mood": "dramatic",
+        "videos": 3,
+        "research": "",
+        "model": "kling",
+        "aspect": "16:9",
+        "duration": 5,
+        "mode": "std",
+        "sound": "yes",
+        "image_urls": [],
     }
+    step_idx = 0
 
-    if pipeline == "auto":
-        cfg.update({
-            "region":       region,
-            "language":     language,
-            "topic":        topic,
-        })
-    else:
-        cfg["user_prompts"] = user_prompts
-        cfg["topic"] = "custom"
+    while True:
+        if step_idx == 0:
+            state["pipeline"] = ask_choice(
+                "Pipeline mode:",
+                options=["auto", "manual"],
+                default=state["pipeline"],
+                descriptions={
+                    "auto":   "Trending news → GLM → AI video",
+                    "manual": "Your scenes → GLM enhance → AI video",
+                },
+            )
+            step_idx = 1
+            continue
 
-    return cfg
+        if step_idx == 1:
+            try:
+                if state["pipeline"] == "auto":
+                    section("STEP 1 / 4 — News source")
+                    print_region_table()
+                    state["region"] = ask_free(
+                        "Which region? (enter the 2-letter code)",
+                        default=state["region"],
+                        allow_back=True,
+                    ).upper()
+                    state["language"] = ask_free(
+                        "Language code?",
+                        default=state["language"],
+                        note="en English │ es Spanish │ fr French │ de German │ ja Japanese\n"
+                             "  zh Chinese │ ko Korean  │ pt Portuguese │ ar Arabic",
+                        allow_back=True,
+                    ).lower()
+                    state["topic"] = ask_choice(
+                        "Which news topic?",
+                        options=list(_TOPIC_SECTIONS.keys()),
+                        default=state["topic"],
+                        allow_freetext=True,
+                        allow_back=True,
+                        descriptions={
+                            "top":           "Top headlines across all categories",
+                            "world":         "International news",
+                            "nation":        "Domestic / national news",
+                            "business":      "Finance, markets, economy",
+                            "technology":    "Tech, AI, gadgets",
+                            "entertainment": "Movies, music, culture",
+                            "sports":        "All sports",
+                            "science":       "Science & research",
+                            "health":        "Health, medicine, wellness",
+                        },
+                    )
+                else:
+                    section("STEP 1 / 4 — Your scene concepts")
+                    state["user_prompts"] = ask_prompts(allow_back=True)
+                step_idx = 2
+                continue
+            except BackRequest:
+                step_idx = 0
+                continue
+
+        if step_idx == 2:
+            try:
+                section("STEP 2 / 4 — Prompt style")
+                state["style"] = ask_choice(
+                    "Visual style for the generated prompts:",
+                    options=["cinematic", "documentary", "commercial", "comedy",
+                             "anime", "retro", "aerial", "cyberpunk", "horror", "minimalist"],
+                    default=state["style"],
+                    allow_back=True,
+                    descriptions={
+                        "cinematic":    "Film-quality narrative, lens effects, shallow depth of field",
+                        "documentary":  "Raw, handheld, observational, natural imperfections",
+                        "commercial":   "Polished, brand-ready, clean product-focused shots",
+                        "comedy":       "Bright, wide shots, exaggerated staging, expressive framing",
+                        "anime":        "Cel-shaded, vibrant colors, stylised exaggerated motion",
+                        "retro":        "Film grain, VHS artifacts, 70s/80s vintage color science",
+                        "aerial":       "Drone / bird's-eye, sweeping wide-angle landscapes",
+                        "cyberpunk":    "Neon-drenched, rain-slicked, holographic, dystopian urban",
+                        "horror":       "Dutch angles, deep shadows, unsettling tight framing",
+                        "minimalist":   "Clean negative space, limited palette, geometric symmetry",
+                    },
+                )
+                state["mood"] = ask_choice(
+                    "Mood / tone:",
+                    options=["dramatic", "funny", "epic", "serene", "dark",
+                             "inspirational", "mysterious", "nostalgic", "tense", "playful"],
+                    default=state["mood"],
+                    allow_back=True,
+                    descriptions={
+                        "dramatic":      "Intense, high-stakes, powerful emotional weight",
+                        "funny":         "Comedic, absurd, lighthearted and laugh-out-loud",
+                        "epic":          "Grand scale, sweeping, monumental scope",
+                        "serene":        "Calm, peaceful, slow movement",
+                        "dark":          "Moody, shadowy, ominous atmosphere",
+                        "inspirational": "Hopeful, motivating, uplifting tone",
+                        "mysterious":    "Enigmatic, atmospheric, fog and haze",
+                        "nostalgic":     "Warm, wistful, memory-like softness",
+                        "tense":         "Suspense, unease, tight framing",
+                        "playful":       "Whimsical, bouncy, vibrant energy",
+                    },
+                )
+                if state["pipeline"] == "auto":
+                    state["videos"] = ask_int(
+                        "How many videos to generate?",
+                        default=state["videos"],
+                        min_val=1,
+                        max_val=10,
+                        allow_back=True,
+                    )
+                else:
+                    state["videos"] = len(state["user_prompts"])
+                    print(f"\n  {Style.DIM}Videos: {state['videos']} (one per scene concept){Style.RESET_ALL}")
+                state["research"] = ask_free(
+                    "Research topic for background info (optional):",
+                    default=state["research"],
+                    note="One search query — type all keywords on one line, space or comma separated.\n"
+                         "  GLM will use the results to enrich the prompts.\n"
+                         "  e.g.  Diagno Energy,  CES 2026 AI chips,  Tesla launch Australia 2026\n"
+                         "  Leave blank to skip.",
+                    allow_back=True,
+                ).strip()
+                step_idx = 3
+                continue
+            except BackRequest:
+                step_idx = 1
+                continue
+
+        if step_idx == 3:
+            try:
+                section("STEP 3 / 4 — Video output")
+                state["model"] = ask_choice(
+                    "Video model:",
+                    options=MODEL_NAMES,
+                    default=state["model"],
+                    descriptions=model_descriptions(),
+                    allow_back=True,
+                )
+                state["aspect"] = ask_choice(
+                    "Aspect ratio:",
+                    options=["16:9", "9:16", "1:1"],
+                    default=state["aspect"],
+                    allow_back=True,
+                    descriptions={
+                        "16:9": "Landscape — YouTube, TV, desktop",
+                        "9:16": "Vertical  — TikTok, Instagram Reels, Shorts",
+                        "1:1":  "Square    — Instagram feed, general social",
+                    },
+                )
+                state["duration"] = ask_int(
+                    "Clip duration (seconds):",
+                    default=state["duration"],
+                    min_val=3,
+                    max_val=15,
+                    allow_back=True,
+                )
+                state["mode"] = ask_choice(
+                    "Render mode  (controls resolution & cost):",
+                    options=["std", "pro"],
+                    default=state["mode"],
+                    allow_back=True,
+                    descriptions={
+                        "std": "720P  — faster & cheaper",
+                        "pro": "1080P — higher quality",
+                    },
+                )
+                state["sound"] = ask_choice(
+                    "Auto-generated sound?:",
+                    options=["yes", "no"],
+                    default=state["sound"],
+                    allow_back=True,
+                    descriptions={
+                        "yes": "AI generates matching ambient / music audio",
+                        "no":  "Silent video — lower cost",
+                    },
+                )
+                step_idx = 4
+                continue
+            except BackRequest:
+                step_idx = 2
+                continue
+
+        if step_idx == 4:
+            section("STEP 4 / 4 — Reference images  (optional)")
+            print(f"  {Style.DIM}│ Select one or more images per scene, or skip for text-to-video.{Style.RESET_ALL}")
+            image_urls: list[list[str]] = []
+            scene_idx = 0
+            try:
+                while scene_idx < state["videos"]:
+                    existing = state["image_urls"][scene_idx] if scene_idx < len(state["image_urls"]) else []
+                    if existing:
+                        info("Current", f"Scene {scene_idx + 1}: {len(existing)} image(s) already selected")
+                    imgs = ask_images(
+                        prompt_label=f"Images for scene {scene_idx + 1} of {state['videos']}",
+                        allow_back=True,
+                    )
+                    image_urls.append(imgs)
+                    scene_idx += 1
+                state["image_urls"] = image_urls
+                cfg: dict = {
+                    "pipeline":   state["pipeline"],
+                    "model":      state["model"],
+                    "style":      state["style"],
+                    "mood":       state["mood"],
+                    "videos":     state["videos"],
+                    "aspect":     state["aspect"],
+                    "duration":   state["duration"],
+                    "mode":       state["mode"],
+                    "sound":      state["sound"] == "yes",
+                    "image_urls": state["image_urls"],
+                    "research":   state["research"] or None,
+                }
+                if state["pipeline"] == "auto":
+                    cfg.update({
+                        "region":   state["region"],
+                        "language": state["language"],
+                        "topic":    state["topic"],
+                    })
+                else:
+                    cfg["user_prompts"] = state["user_prompts"]
+                    cfg["topic"] = "custom"
+                return cfg
+            except BackRequest:
+                step_idx = 3
+                continue

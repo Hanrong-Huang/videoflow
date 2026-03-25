@@ -6,7 +6,7 @@ Main orchestrator: parses CLI, coordinates the pipeline.
 Module layout:
   models.py    — Video model registry (add/remove models here)
   cli.py       — UI helpers, interactive wizard, settings confirmation
-  prompts.py   — GLM-4.7 prompt generation, news fetching
+  prompts.py   — glm-5 prompt generation, news fetching
   backends.py  — Video API backends (create/poll/download)
 
 Pipeline:
@@ -38,7 +38,8 @@ from cli import (
     _encode_image_base64,
 )
 from prompts import (
-    fetch_trending_topics, generate_prompts, enhance_prompts, web_search,
+    fetch_trending_topics, generate_prompts, enhance_prompts,
+    analyze_reference_images, web_search,
 )
 from backends import (
     submit_task, poll_all, download_result,
@@ -56,10 +57,14 @@ VIDEO_API_KEY  = os.environ.get("VIDEO_API_KEY", "")
 ZAI_API_KEY    = os.environ.get("ZAI_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
-# ── Z.AI / GLM-4.7 client ────────────────────────────────────────────────────
+# ── Z.AI / glm-5 client ──────────────────────────────────────────────────────
 zai_client = OpenAI(
     api_key=ZAI_API_KEY,
     base_url="https://api.z.ai/api/coding/paas/v4/",
+)
+zai_vision_client = OpenAI(
+    api_key=ZAI_API_KEY,
+    base_url="https://api.z.ai/api/paas/v4/",
 )
 
 # ── Project directories ──────────────────────────────────────────────────────
@@ -126,7 +131,7 @@ examples:
     p.add_argument("--image",    default=None,
                    help="[Deprecated] Use --images instead")
     p.add_argument("--images",   nargs="*", default=None,
-                   help="Reference image URLs or local paths (one per scene)")
+                   help="Reference image URLs or local paths; use a|b to attach multiple images to one scene")
     p.add_argument("--prompts",  nargs="+", default=None,
                    help="Scene prompts for manual mode (one per arg)")
     p.add_argument("--research", default=None,
@@ -146,8 +151,9 @@ def _cli_has_args(args: argparse.Namespace) -> bool:
 def build_cfg_from_args(args: argparse.Namespace) -> dict:
     """Build a config dict from CLI args with sensible defaults."""
     pipeline = args.pipeline or "auto"
-    # Normalise --image (deprecated) + --images into list[list[str]]
     flat = args.images if args.images else ([args.image] if args.image else [])
+    expected_videos = args.videos or 3 if pipeline == "auto" else len(args.prompts or [])
+    image_groups = _group_cli_images(flat, expected_videos)
     cfg: dict = {
         "pipeline":   pipeline,
         "model":      args.model    or "kling",
@@ -157,7 +163,7 @@ def build_cfg_from_args(args: argparse.Namespace) -> dict:
         "duration":   args.duration or 5,
         "mode":       args.mode     or "std",
         "sound":      args.sound if args.sound is not None else True,
-        "image_urls": [[url] for url in flat],
+        "image_urls": image_groups,
         "research":   args.research,
     }
     if pipeline == "auto":
@@ -173,6 +179,23 @@ def build_cfg_from_args(args: argparse.Namespace) -> dict:
             print(f"  {Fore.RED}✖  --prompts required for manual mode.{Style.RESET_ALL}")
             sys.exit(1)
     return cfg
+
+
+def _group_cli_images(raw_images: list[str], expected_videos: int) -> list[list[str]]:
+    """
+    Group CLI image inputs into per-scene lists.
+    Use `a|b|c` to attach multiple images to one scene explicitly.
+    """
+    if not raw_images:
+        return []
+    if any("|" in item for item in raw_images):
+        return [
+            [part.strip() for part in item.split("|") if part.strip()]
+            for item in raw_images
+        ]
+    if expected_videos == 1:
+        return [raw_images]
+    return [[url] for url in raw_images]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -319,6 +342,33 @@ def _resolve_image_url(raw: str | None, download_remote: bool = False) -> str | 
     return _encode_image_base64(path)
 
 
+def _normalize_scene_images(raw_scenes: list, num_vids: int) -> list[list[str]]:
+    """Normalize image config to one list of images per scene."""
+    scenes: list[list[str]] = []
+    for scene in raw_scenes or []:
+        if isinstance(scene, list):
+            cleaned = [str(url).strip() for url in scene if str(url).strip()]
+        elif scene:
+            cleaned = [str(scene).strip()]
+        else:
+            cleaned = []
+        scenes.append(cleaned)
+
+    if num_vids <= 0:
+        return scenes
+    if len(scenes) == 1 and scenes[0] and num_vids > 1:
+        success(
+            f"Reusing {len(scenes[0])} reference image(s) across all "
+            f"{num_vids} scenes"
+        )
+        scenes = [list(scenes[0]) for _ in range(num_vids)]
+    elif len(scenes) < num_vids:
+        scenes += [[] for _ in range(num_vids - len(scenes))]
+    else:
+        scenes = scenes[:num_vids]
+    return scenes
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main pipeline
 # ─────────────────────────────────────────────────────────────────────────────
@@ -348,7 +398,8 @@ def main() -> None:
     if is_openai(model):
         ensure_openai_client()
 
-    if not confirm_settings(cfg):
+    confirm_action = confirm_settings(cfg)
+    if confirm_action != "start":
         print(f"\n  {Fore.YELLOW}Cancelled. Run the script again to start over.{Style.RESET_ALL}\n")
         sys.exit(0)
 
@@ -366,16 +417,14 @@ def main() -> None:
     # Kling/Veo fetch images themselves — pass http/https URLs as-is;
     # local files are base64-encoded into data URIs for all backends.
     num_vids = cfg.get("videos", 1)
+    cfg["image_urls"] = _normalize_scene_images(cfg.get("image_urls", []), num_vids)
     download_remote = is_openai(model)
     image_urls: list[list[str]] = [
         [r for url in scene if (r := _resolve_image_url(url, download_remote=download_remote))]
         for scene in cfg.get("image_urls", [])
     ]
-    # Pad or truncate to match video count
-    if len(image_urls) < num_vids:
-        image_urls += [[]] * (num_vids - len(image_urls))
-    else:
-        image_urls = image_urls[:num_vids]
+
+    scene_image_briefs = analyze_reference_images(zai_vision_client, image_urls)
 
     # For kie.ai backends (Kling, Veo): API only accepts real HTTP URLs.
     # Local images (resolved to base64 data URIs) must be uploaded to CDN first.
@@ -425,9 +474,9 @@ def main() -> None:
             region=cfg["region"], language=cfg["language"],
             topic=cfg["topic"],
         )
-        success(f"{len(articles)} articles fetched (GLM-4.7 will select the best {cfg['videos']})")
+        success(f"{len(articles)} articles fetched (glm-5 will select the best {cfg['videos']})")
 
-        step(2, TOTAL_STEPS, f"Generating {cfg['videos']} video prompt(s) via GLM-4.7  "
+        step(2, TOTAL_STEPS, f"Generating {cfg['videos']} video prompt(s) via glm-5  "
              f"style={Fore.CYAN}{cfg['style']}{Style.RESET_ALL}  "
              f"mood={Fore.CYAN}{cfg['mood']}{Style.RESET_ALL}")
 
@@ -436,6 +485,7 @@ def main() -> None:
             style=cfg["style"], mood=cfg["mood"],
             duration=cfg["duration"], sound=cfg["sound"],
             research=research_results or None,
+            scene_image_briefs=scene_image_briefs,
         )
         success(f"{len(prompts)} prompt(s) generated")
 
@@ -444,7 +494,7 @@ def main() -> None:
         for i, c in enumerate(cfg["user_prompts"], 1):
             print(f"  {Fore.CYAN}{i}.{Style.RESET_ALL} {c[:90]}{'…' if len(c) > 90 else ''}")
 
-        step(2, TOTAL_STEPS, f"Enhancing {cfg['videos']} prompt(s) via GLM-4.7  "
+        step(2, TOTAL_STEPS, f"Enhancing {cfg['videos']} prompt(s) via glm-5  "
              f"style={Fore.CYAN}{cfg['style']}{Style.RESET_ALL}  "
              f"mood={Fore.CYAN}{cfg['mood']}{Style.RESET_ALL}")
 
@@ -453,6 +503,7 @@ def main() -> None:
             style=cfg["style"], mood=cfg["mood"],
             duration=cfg["duration"], sound=cfg["sound"],
             research=research_results or None,
+            scene_image_briefs=scene_image_briefs,
         )
         success(f"{len(prompts)} prompt(s) enhanced")
 
